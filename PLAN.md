@@ -9,10 +9,10 @@ Foundation components for parsing and representing Sanna specifications.
 - [x] Define token types for all keywords (spec, type, model, invariant, axiom, requires, ensures, etc.)
 - [x] Define token types for operators (logical, comparison, arithmetic, set/collection, specification-specific)
 - [x] Implement lexer with support for comments, string literals, and number literals
-- [ ] Define AST node types for modules, imports, and top-level declarations
-- [ ] Define AST node types for type definitions (product types, sum types, generic types)
-- [ ] Define AST node types for specifications (function specs, interface specs)
-- [ ] Define AST node types for expressions (logical, arithmetic, quantifiers, comprehensions)
+- [x] Define AST node types for modules, imports, and top-level declarations
+- [x] Define AST node types for type definitions (product types, sum types, generic types)
+- [x] Define AST node types for specifications (function specs, interface specs)
+- [x] Define AST node types for expressions (logical, arithmetic, quantifiers, comprehensions)
 - [ ] Implement recursive descent parser for module declarations
 - [ ] Implement parser for type definitions with invariants
 - [ ] Implement parser for function specifications (requires/ensures/modifies)
