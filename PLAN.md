@@ -6,9 +6,9 @@ This plan outlines the implementation of Sanna, a specification language for AI-
 
 Foundation components for parsing and representing Sanna specifications.
 
-- [ ] Define token types for all keywords (spec, type, model, invariant, axiom, requires, ensures, etc.)
-- [ ] Define token types for operators (logical, comparison, arithmetic, set/collection, specification-specific)
-- [ ] Implement lexer with support for comments, string literals, and number literals
+- [x] Define token types for all keywords (spec, type, model, invariant, axiom, requires, ensures, etc.)
+- [x] Define token types for operators (logical, comparison, arithmetic, set/collection, specification-specific)
+- [x] Implement lexer with support for comments, string literals, and number literals
 - [ ] Define AST node types for modules, imports, and top-level declarations
 - [ ] Define AST node types for type definitions (product types, sum types, generic types)
 - [ ] Define AST node types for specifications (function specs, interface specs)
