@@ -11,6 +11,7 @@ pub const types = @import("types/root.zig");
 pub const specs = @import("specs/root.zig");
 pub const verify = @import("verify/root.zig");
 pub const provenance = @import("provenance/root.zig");
+pub const trust = @import("trust/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -52,6 +53,16 @@ pub const Author = provenance.Author;
 pub const AuthorKind = provenance.AuthorKind;
 pub const Confidence = provenance.Confidence;
 
+// Re-export commonly used types from trust system
+pub const TrustCalculator = trust.TrustCalculator;
+pub const TrustConfig = trust.TrustConfig;
+pub const TrustScore = trust.Score;
+pub const TrustLevel = trust.Level;
+pub const TrustThresholds = trust.TrustThresholds;
+pub const TrustReportGenerator = trust.TrustReportGenerator;
+pub const TrustReport = trust.Report;
+pub const CriticalityLevel = trust.CriticalityLevel;
+
 test {
     _ = lexer;
     _ = parser;
@@ -59,4 +70,5 @@ test {
     _ = specs;
     _ = verify;
     _ = provenance;
+    _ = trust;
 }

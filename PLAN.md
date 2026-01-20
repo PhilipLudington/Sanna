@@ -92,16 +92,16 @@ Track code authorship and AI confidence levels.
 
 Calculate and report trust scores combining verification, confidence, and provenance.
 
-- [ ] Implement base trust calculation from verification status
-- [ ] Implement provenance modifier calculation
-- [ ] Implement age modifier calculation (decay over time)
-- [ ] Implement criticality modifier (security-sensitive, money-handling flags)
-- [ ] Implement composite trust score formula
-- [ ] Generate per-function trust reports
-- [ ] Implement review queue generation sorted by trust score
-- [ ] Implement filtering (unproven only, below threshold, etc.)
-- [ ] Generate trust-report.json output format
-- [ ] Implement trust thresholds (auto-approve, require-review, block-deployment)
+- [x] Implement base trust calculation from verification status
+- [x] Implement provenance modifier calculation
+- [x] Implement age modifier calculation (decay over time)
+- [x] Implement criticality modifier (security-sensitive, money-handling flags)
+- [x] Implement composite trust score formula
+- [x] Generate per-function trust reports
+- [x] Implement review queue generation sorted by trust score
+- [x] Implement filtering (unproven only, below threshold, etc.)
+- [x] Generate trust-report.json output format
+- [x] Implement trust thresholds (auto-approve, require-review, block-deployment)
 
 ## Phase 7: Code Generation Interface
 
