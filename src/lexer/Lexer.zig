@@ -427,9 +427,8 @@ pub fn nextToken(self: *Lexer) !Token.Token {
                 _ = self.advance();
                 return self.makeToken(.op_implies, start_loc, 2);
             }
-            // Single '=' - could be assignment in impl, treat as invalid for now
-            try self.addError("Unexpected '=' - use '==' for equality", start_loc);
-            return self.makeToken(.invalid, start_loc, 1);
+            // Single '=' for type definitions and let bindings
+            return self.makeToken(.op_assign, start_loc, 1);
         },
         '!' => {
             _ = self.advance();

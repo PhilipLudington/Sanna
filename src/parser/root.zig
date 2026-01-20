@@ -5,6 +5,7 @@
 const std = @import("std");
 
 pub const Ast = @import("Ast.zig");
+pub const Parser = @import("Parser.zig");
 
 // Re-export commonly used types
 pub const Module = Ast.Module;
@@ -23,6 +24,11 @@ pub const TypeParameter = Ast.TypeParameter;
 pub const Attribute = Ast.Attribute;
 pub const Visibility = Ast.Visibility;
 
+// Re-export parser types
+pub const ParseError = Parser.ParseError;
+pub const Diagnostic = Parser.Diagnostic;
+
 test {
     _ = Ast;
+    _ = Parser;
 }

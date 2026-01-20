@@ -13,10 +13,10 @@ Foundation components for parsing and representing Sanna specifications.
 - [x] Define AST node types for type definitions (product types, sum types, generic types)
 - [x] Define AST node types for specifications (function specs, interface specs)
 - [x] Define AST node types for expressions (logical, arithmetic, quantifiers, comprehensions)
-- [ ] Implement recursive descent parser for module declarations
-- [ ] Implement parser for type definitions with invariants
-- [ ] Implement parser for function specifications (requires/ensures/modifies)
-- [ ] Implement parser for expressions including old(), result, and quantifiers
+- [x] Implement recursive descent parser for module declarations
+- [x] Implement parser for type definitions with invariants
+- [x] Implement parser for function specifications (requires/ensures/modifies)
+- [x] Implement parser for expressions including old(), result, and quantifiers
 - [ ] Implement error recovery and source location tracking
 - [ ] Create pretty-printer for AST debugging
 

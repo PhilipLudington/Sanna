@@ -141,6 +141,7 @@ pub const TokenType = enum {
     op_range, // .. (range)
     op_arrow, // -> (function return type)
     op_question, // ? (optional/error propagation)
+    op_assign, // = (type definition, let binding)
 
     // ========================================
     // Delimiters
@@ -271,6 +272,7 @@ pub const Token = struct {
             .op_range,
             .op_arrow,
             .op_question,
+            .op_assign,
             => true,
             else => false,
         };
