@@ -1,0 +1,244 @@
+module std.result
+
+// ============================================================================
+// Result[T, E] - Success or failure type
+// ============================================================================
+
+type Result[T, E] =
+    | Ok(T)
+    | Err(E)
+
+// ============================================================================
+// Constructors
+// ============================================================================
+
+spec pure fn ok[T, E](value: T) -> Result[T, E]
+  ensures: result == Ok(value)
+
+spec pure fn err[T, E](error: E) -> Result[T, E]
+  ensures: result == Err(error)
+
+// ============================================================================
+// Predicates
+// ============================================================================
+
+spec pure fn is_ok[T, E](self: Result[T, E]) -> bool
+  ensures:
+    match self {
+        Ok(_) => result == true
+        Err(_) => result == false
+    }
+
+spec pure fn is_err[T, E](self: Result[T, E]) -> bool
+  ensures: result == not self.is_ok()
+
+// ============================================================================
+// Accessors
+// ============================================================================
+
+spec pure fn unwrap[T, E](self: Result[T, E]) -> T
+  requires: self.is_ok()
+  ensures:
+    match self {
+        Ok(t) => result == t
+        Err(_) => false  // unreachable due to requires
+    }
+
+spec pure fn unwrap_err[T, E](self: Result[T, E]) -> E
+  requires: self.is_err()
+  ensures:
+    match self {
+        Ok(_) => false  // unreachable due to requires
+        Err(e) => result == e
+    }
+
+spec pure fn unwrap_or[T, E](self: Result[T, E], default: T) -> T
+  ensures:
+    match self {
+        Ok(t) => result == t
+        Err(_) => result == default
+    }
+
+spec pure fn unwrap_or_else[T, E](self: Result[T, E], f: fn(E) -> T) -> T
+  ensures:
+    match self {
+        Ok(t) => result == t
+        Err(e) => result == f(e)
+    }
+
+spec pure fn expect[T, E](self: Result[T, E], msg: string) -> T
+  requires: self.is_ok()
+  ensures: result == self.unwrap()
+
+spec pure fn expect_err[T, E](self: Result[T, E], msg: string) -> E
+  requires: self.is_err()
+  ensures: result == self.unwrap_err()
+
+// ============================================================================
+// Option conversion
+// ============================================================================
+
+spec pure fn ok_option[T, E](self: Result[T, E]) -> Option[T]
+  ensures:
+    match self {
+        Ok(t) => result == Some(t)
+        Err(_) => result == None
+    }
+
+spec pure fn err_option[T, E](self: Result[T, E]) -> Option[E]
+  ensures:
+    match self {
+        Ok(_) => result == None
+        Err(e) => result == Some(e)
+    }
+
+// ============================================================================
+// Transformations
+// ============================================================================
+
+spec pure fn map[T, E, U](self: Result[T, E], f: fn(T) -> U) -> Result[U, E]
+  ensures:
+    match self {
+        Ok(t) => result == Ok(f(t))
+        Err(e) => result == Err(e)
+    }
+
+spec pure fn map_err[T, E, F](self: Result[T, E], f: fn(E) -> F) -> Result[T, F]
+  ensures:
+    match self {
+        Ok(t) => result == Ok(t)
+        Err(e) => result == Err(f(e))
+    }
+
+spec pure fn map_or[T, E, U](self: Result[T, E], default: U, f: fn(T) -> U) -> U
+  ensures:
+    match self {
+        Ok(t) => result == f(t)
+        Err(_) => result == default
+    }
+
+spec pure fn map_or_else[T, E, U](self: Result[T, E], default: fn(E) -> U, f: fn(T) -> U) -> U
+  ensures:
+    match self {
+        Ok(t) => result == f(t)
+        Err(e) => result == default(e)
+    }
+
+// ============================================================================
+// Chaining / Monadic operations
+// ============================================================================
+
+spec pure fn and_then[T, E, U](self: Result[T, E], f: fn(T) -> Result[U, E]) -> Result[U, E]
+  ensures:
+    match self {
+        Ok(t) => result == f(t)
+        Err(e) => result == Err(e)
+    }
+
+spec pure fn or_else[T, E, F](self: Result[T, E], f: fn(E) -> Result[T, F]) -> Result[T, F]
+  ensures:
+    match self {
+        Ok(t) => result == Ok(t)
+        Err(e) => result == f(e)
+    }
+
+spec pure fn and[T, E, U](self: Result[T, E], res: Result[U, E]) -> Result[U, E]
+  ensures:
+    match self {
+        Ok(_) => result == res
+        Err(e) => result == Err(e)
+    }
+
+spec pure fn or[T, E](self: Result[T, E], res: Result[T, E]) -> Result[T, E]
+  ensures:
+    match self {
+        Ok(t) => result == Ok(t)
+        Err(_) => result == res
+    }
+
+// ============================================================================
+// Inspection
+// ============================================================================
+
+spec fn inspect[T, E](self: Result[T, E], f: fn(T) -> ()) -> Result[T, E]
+  ensures: result == self
+
+spec fn inspect_err[T, E](self: Result[T, E], f: fn(E) -> ()) -> Result[T, E]
+  ensures: result == self
+
+// ============================================================================
+// Flattening
+// ============================================================================
+
+spec pure fn flatten[T, E](self: Result[Result[T, E], E]) -> Result[T, E]
+  ensures:
+    match self {
+        Ok(Ok(t)) => result == Ok(t)
+        Ok(Err(e)) => result == Err(e)
+        Err(e) => result == Err(e)
+    }
+
+// ============================================================================
+// Transpose
+// ============================================================================
+
+spec pure fn transpose[T, E](self: Result[Option[T], E]) -> Option[Result[T, E]]
+  ensures:
+    match self {
+        Ok(Some(t)) => result == Some(Ok(t))
+        Ok(None) => result == None
+        Err(e) => result == Some(Err(e))
+    }
+
+// ============================================================================
+// Comparison (when T and E are comparable)
+// ============================================================================
+
+spec pure fn eq[T: Eq, E: Eq](self: Result[T, E], other: Result[T, E]) -> bool
+  ensures:
+    match (self, other) {
+        (Ok(t1), Ok(t2)) => result == (t1 == t2)
+        (Err(e1), Err(e2)) => result == (e1 == e2)
+        _ => result == false
+    }
+
+// ============================================================================
+// Utility functions
+// ============================================================================
+
+spec pure fn try_collect[T, E](results: List[Result[T, E]]) -> Result[List[T], E]
+  ensures:
+    forall r in results: r.is_err() => result.is_err()
+    forall r in results: r.is_ok() =>
+        result.is_ok() => result.unwrap().length == results.length
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom ok_is_ok[T, E]:
+    forall t: T: ok[T, E](t).is_ok()
+
+axiom err_is_err[T, E]:
+    forall e: E: err[T, E](e).is_err()
+
+axiom ok_unwrap[T, E]:
+    forall t: T: ok[T, E](t).unwrap() == t
+
+axiom err_unwrap_err[T, E]:
+    forall e: E: err[T, E](e).unwrap_err() == e
+
+axiom map_identity[T, E]:
+    forall r: Result[T, E]: r.map(|x| x) == r
+
+axiom map_composition[T, E, U, V]:
+    forall r: Result[T, E], f: fn(T) -> U, g: fn(U) -> V:
+        r.map(f).map(g) == r.map(|x| g(f(x)))
+
+axiom and_then_left_identity[T, E, U]:
+    forall t: T, f: fn(T) -> Result[U, E]:
+        ok[T, E](t).and_then(f) == f(t)
+
+axiom and_then_right_identity[T, E]:
+    forall r: Result[T, E]:
+        r.and_then(|x| ok[T, E](x)) == r

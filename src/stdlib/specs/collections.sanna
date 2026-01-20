@@ -1,0 +1,341 @@
+module std.collections
+
+// ============================================================================
+// List[T] - Ordered, indexed collection
+// ============================================================================
+
+spec interface List[T] {
+    type Element = T
+
+    // Construction
+    fn new() -> Self
+      ensures: result.length == 0
+
+    fn from_array(arr: Array[T]) -> Self
+      ensures:
+        result.length == arr.length
+        forall i in 0..arr.length: result[i] == arr[i]
+
+    // Length operations
+    pure fn length(self) -> usize
+
+    pure fn is_empty(self) -> bool
+      ensures: result == (self.length == 0)
+
+    // Element access
+    fn get(self, index: usize) -> Option[T]
+      ensures:
+        index >= self.length => result == None
+        index < self.length => result == Some(self[index])
+
+    fn first(self) -> Option[T]
+      ensures:
+        self.is_empty() => result == None
+        not self.is_empty() => result == Some(self[0])
+
+    fn last(self) -> Option[T]
+      ensures:
+        self.is_empty() => result == None
+        not self.is_empty() => result == Some(self[self.length - 1])
+
+    // Modification
+    fn push(self, item: T) -> ()
+      ensures:
+        self.length == old(self.length) + 1
+        self[self.length - 1] == item
+        forall i in 0..old(self.length): self[i] == old(self[i])
+      modifies: self
+
+    fn pop(self) -> Option[T]
+      ensures:
+        old(self.length) == 0 => result == None and self.length == 0
+        old(self.length) > 0 =>
+            result == Some(old(self[self.length - 1]))
+            and self.length == old(self.length) - 1
+            and forall i in 0..self.length: self[i] == old(self[i])
+      modifies: self
+
+    fn insert(self, index: usize, item: T) -> ()
+      requires: index <= self.length
+      ensures:
+        self.length == old(self.length) + 1
+        self[index] == item
+        forall i in 0..index: self[i] == old(self[i])
+        forall i in index+1..self.length: self[i] == old(self[i - 1])
+      modifies: self
+
+    fn remove(self, index: usize) -> T
+      requires: index < self.length
+      ensures:
+        result == old(self[index])
+        self.length == old(self.length) - 1
+        forall i in 0..index: self[i] == old(self[i])
+        forall i in index..self.length: self[i] == old(self[i + 1])
+      modifies: self
+
+    fn clear(self) -> ()
+      ensures: self.length == 0
+      modifies: self
+
+    // Search
+    fn contains(self, item: T) -> bool
+      requires: T: Eq
+      ensures: result == exists i in 0..self.length: self[i] == item
+
+    fn index_of(self, item: T) -> Option[usize]
+      requires: T: Eq
+      ensures:
+        result == None => not self.contains(item)
+        result == Some(i) => self[i] == item and forall j in 0..i: self[j] != item
+
+    // Transformation
+    pure fn map[U](self, f: fn(T) -> U) -> List[U]
+      ensures:
+        result.length == self.length
+        forall i in 0..self.length: result[i] == f(self[i])
+
+    pure fn filter(self, pred: fn(T) -> bool) -> List[T]
+      ensures:
+        result.length <= self.length
+        forall x in result: pred(x) and self.contains(x)
+
+    pure fn fold[U](self, init: U, f: fn(U, T) -> U) -> U
+
+    // Ordering
+    fn reverse(self) -> ()
+      ensures:
+        self.length == old(self.length)
+        forall i in 0..self.length: self[i] == old(self[self.length - 1 - i])
+      modifies: self
+
+    fn sort(self) -> ()
+      requires: T: Ord
+      ensures:
+        self.is_permutation_of(old(self))
+        self.is_sorted()
+      modifies: self
+
+    // Predicates
+    pure fn is_sorted(self) -> bool
+      requires: T: Ord
+      ensures: result == forall i, j in 0..self.length: i < j => self[i] <= self[j]
+
+    pure fn is_permutation_of(self, other: List[T]) -> bool
+      requires: T: Eq
+      ensures:
+        result => self.length == other.length
+        result => forall x in self: self.count(x) == other.count(x)
+
+    pure fn count(self, item: T) -> usize
+      requires: T: Eq
+      ensures: result == (0..self.length).filter(|i| self[i] == item).length
+
+    // Invariants
+    invariant: self.length >= 0
+}
+
+// ============================================================================
+// Map[K, V] - Key-value associative collection
+// ============================================================================
+
+spec interface Map[K: Eq + Hash, V] {
+    type Key = K
+    type Value = V
+
+    // Construction
+    fn new() -> Self
+      ensures: result.size == 0
+
+    // Size operations
+    pure fn size(self) -> usize
+
+    pure fn is_empty(self) -> bool
+      ensures: result == (self.size == 0)
+
+    // Key operations
+    pure fn contains_key(self, key: K) -> bool
+
+    fn keys(self) -> List[K]
+      ensures:
+        result.length == self.size
+        forall k in result: self.contains_key(k)
+
+    // Value operations
+    fn get(self, key: K) -> Option[V]
+      ensures:
+        self.contains_key(key) <=> result.is_some()
+        result.is_some() => result == Some(self.get_value(key))
+
+    fn values(self) -> List[V]
+      ensures: result.length == self.size
+
+    // Modification
+    fn insert(self, key: K, value: V) -> Option[V]
+      ensures:
+        self.contains_key(key)
+        self.get(key) == Some(value)
+        old(self.contains_key(key)) => result == old(self.get(key))
+        not old(self.contains_key(key)) =>
+            result == None and self.size == old(self.size) + 1
+      modifies: self
+
+    fn remove(self, key: K) -> Option[V]
+      ensures:
+        not self.contains_key(key)
+        old(self.contains_key(key)) =>
+            result == old(self.get(key))
+            and self.size == old(self.size) - 1
+        not old(self.contains_key(key)) => result == None and self.size == old(self.size)
+      modifies: self
+
+    fn clear(self) -> ()
+      ensures: self.size == 0
+      modifies: self
+
+    // Transformation
+    pure fn map_values[U](self, f: fn(V) -> U) -> Map[K, U]
+      ensures:
+        result.size == self.size
+        forall k in self.keys(): result.get(k) == Some(f(self.get_value(k)))
+
+    // Internal helper (specification only)
+    ghost fn get_value(self, key: K) -> V
+      requires: self.contains_key(key)
+
+    // Invariants
+    invariant: self.size >= 0
+    invariant: forall k in self.keys(): self.contains_key(k)
+}
+
+// ============================================================================
+// Set[T] - Unordered collection of unique elements
+// ============================================================================
+
+spec interface Set[T: Eq + Hash] {
+    type Element = T
+
+    // Construction
+    fn new() -> Self
+      ensures: result.size == 0
+
+    fn from_list(list: List[T]) -> Self
+      ensures:
+        forall x in list: result.contains(x)
+        result.size <= list.length
+
+    // Size operations
+    pure fn size(self) -> usize
+
+    pure fn is_empty(self) -> bool
+      ensures: result == (self.size == 0)
+
+    // Membership
+    pure fn contains(self, item: T) -> bool
+
+    // Modification
+    fn insert(self, item: T) -> bool
+      ensures:
+        self.contains(item)
+        result == not old(self.contains(item))
+        result => self.size == old(self.size) + 1
+        not result => self.size == old(self.size)
+      modifies: self
+
+    fn remove(self, item: T) -> bool
+      ensures:
+        not self.contains(item)
+        result == old(self.contains(item))
+        result => self.size == old(self.size) - 1
+        not result => self.size == old(self.size)
+      modifies: self
+
+    fn clear(self) -> ()
+      ensures: self.size == 0
+      modifies: self
+
+    // Set operations
+    pure fn union(self, other: Set[T]) -> Set[T]
+      ensures:
+        forall x in self: result.contains(x)
+        forall x in other: result.contains(x)
+        forall x in result: self.contains(x) or other.contains(x)
+
+    pure fn intersection(self, other: Set[T]) -> Set[T]
+      ensures:
+        forall x in result: self.contains(x) and other.contains(x)
+        forall x in self: other.contains(x) => result.contains(x)
+
+    pure fn difference(self, other: Set[T]) -> Set[T]
+      ensures:
+        forall x in result: self.contains(x) and not other.contains(x)
+        forall x in self: not other.contains(x) => result.contains(x)
+
+    pure fn symmetric_difference(self, other: Set[T]) -> Set[T]
+      ensures:
+        forall x in result: (self.contains(x) or other.contains(x)) and not (self.contains(x) and other.contains(x))
+
+    // Subset relations
+    pure fn is_subset(self, other: Set[T]) -> bool
+      ensures: result == forall x in self: other.contains(x)
+
+    pure fn is_superset(self, other: Set[T]) -> bool
+      ensures: result == other.is_subset(self)
+
+    pure fn is_disjoint(self, other: Set[T]) -> bool
+      ensures: result == self.intersection(other).is_empty()
+
+    // Conversion
+    fn to_list(self) -> List[T]
+      ensures:
+        result.length == self.size
+        forall x in self: result.contains(x)
+
+    // Transformation
+    pure fn map[U: Eq + Hash](self, f: fn(T) -> U) -> Set[U]
+      ensures:
+        result.size <= self.size
+        forall y in result: exists x in self: f(x) == y
+
+    pure fn filter(self, pred: fn(T) -> bool) -> Set[T]
+      ensures:
+        result.is_subset(self)
+        forall x in result: pred(x)
+        forall x in self: pred(x) => result.contains(x)
+
+    // Invariants
+    invariant: self.size >= 0
+
+    // Axioms
+    axiom uniqueness:
+        forall x in self: self.to_list().count(x) == 1
+}
+
+// ============================================================================
+// Model: Sequence (specification-only mathematical sequence)
+// ============================================================================
+
+model Sequence[T] {
+    empty: Sequence[T]
+    cons(head: T, tail: Sequence[T]) -> Sequence[T]
+    append(self, other: Sequence[T]) -> Sequence[T]
+    length(self) -> nat
+    nth(self, index: nat) -> Option[T]
+
+    axiom empty_length:
+        empty.length == 0
+
+    axiom cons_length:
+        cons(x, xs).length == xs.length + 1
+
+    axiom append_length:
+        self.append(other).length == self.length + other.length
+
+    axiom nth_cons_zero:
+        cons(x, xs).nth(0) == Some(x)
+
+    axiom nth_cons_succ:
+        n > 0 => cons(x, xs).nth(n) == xs.nth(n - 1)
+
+    axiom nth_out_of_bounds:
+        n >= self.length => self.nth(n) == None
+}

@@ -1,0 +1,477 @@
+module std.time
+
+import std.ordering.{Ord, Eq, Ordering}
+
+// ============================================================================
+// Duration - A span of time
+// ============================================================================
+
+type Duration = {
+    // Total nanoseconds (can be negative for "before" durations)
+    nanos: i64
+}
+
+// ============================================================================
+// Duration constructors
+// ============================================================================
+
+spec pure fn zero() -> Duration
+  ensures: result.nanos == 0
+
+spec pure fn nanoseconds(n: i64) -> Duration
+  ensures: result.nanos == n
+
+spec pure fn microseconds(n: i64) -> Duration
+  ensures: result.nanos == n * 1000
+
+spec pure fn milliseconds(n: i64) -> Duration
+  ensures: result.nanos == n * 1_000_000
+
+spec pure fn seconds(n: i64) -> Duration
+  ensures: result.nanos == n * 1_000_000_000
+
+spec pure fn minutes(n: i64) -> Duration
+  ensures: result.nanos == n * 60 * 1_000_000_000
+
+spec pure fn hours(n: i64) -> Duration
+  ensures: result.nanos == n * 3600 * 1_000_000_000
+
+spec pure fn days(n: i64) -> Duration
+  ensures: result.nanos == n * 86400 * 1_000_000_000
+
+spec pure fn weeks(n: i64) -> Duration
+  ensures: result.nanos == n * 7 * 86400 * 1_000_000_000
+
+// ============================================================================
+// Duration accessors
+// ============================================================================
+
+spec pure fn as_nanos(self: Duration) -> i64
+  ensures: result == self.nanos
+
+spec pure fn as_micros(self: Duration) -> i64
+  ensures: result == self.nanos / 1000
+
+spec pure fn as_millis(self: Duration) -> i64
+  ensures: result == self.nanos / 1_000_000
+
+spec pure fn as_secs(self: Duration) -> i64
+  ensures: result == self.nanos / 1_000_000_000
+
+spec pure fn as_mins(self: Duration) -> i64
+  ensures: result == self.nanos / (60 * 1_000_000_000)
+
+spec pure fn as_hours(self: Duration) -> i64
+  ensures: result == self.nanos / (3600 * 1_000_000_000)
+
+spec pure fn as_days(self: Duration) -> i64
+  ensures: result == self.nanos / (86400 * 1_000_000_000)
+
+// Subsecond component
+spec pure fn subsec_nanos(self: Duration) -> i64
+  ensures: result == self.nanos % 1_000_000_000
+
+spec pure fn subsec_micros(self: Duration) -> i64
+  ensures: result == (self.nanos % 1_000_000_000) / 1000
+
+spec pure fn subsec_millis(self: Duration) -> i64
+  ensures: result == (self.nanos % 1_000_000_000) / 1_000_000
+
+// ============================================================================
+// Duration predicates
+// ============================================================================
+
+spec pure fn is_zero(self: Duration) -> bool
+  ensures: result == (self.nanos == 0)
+
+spec pure fn is_positive(self: Duration) -> bool
+  ensures: result == (self.nanos > 0)
+
+spec pure fn is_negative(self: Duration) -> bool
+  ensures: result == (self.nanos < 0)
+
+// ============================================================================
+// Duration arithmetic
+// ============================================================================
+
+spec pure fn add(self: Duration, other: Duration) -> Duration
+  ensures: result.nanos == self.nanos + other.nanos
+
+spec pure fn subtract(self: Duration, other: Duration) -> Duration
+  ensures: result.nanos == self.nanos - other.nanos
+
+spec pure fn multiply(self: Duration, factor: i64) -> Duration
+  ensures: result.nanos == self.nanos * factor
+
+spec pure fn divide(self: Duration, divisor: i64) -> Duration
+  requires: divisor != 0
+  ensures: result.nanos == self.nanos / divisor
+
+spec pure fn negate(self: Duration) -> Duration
+  ensures: result.nanos == -self.nanos
+
+spec pure fn abs(self: Duration) -> Duration
+  ensures: result.nanos == if self.nanos >= 0 then self.nanos else -self.nanos
+
+// ============================================================================
+// Duration comparison
+// ============================================================================
+
+spec impl Eq for Duration {
+    pure fn eq(self, other: Self) -> bool
+      ensures: result == (self.nanos == other.nanos)
+}
+
+spec impl Ord for Duration {
+    pure fn compare(self, other: Self) -> Ordering
+      ensures:
+        self.nanos < other.nanos => result == Less
+        self.nanos > other.nanos => result == Greater
+        self.nanos == other.nanos => result == Equal
+}
+
+// ============================================================================
+// DateTime - A point in time
+// ============================================================================
+
+type DateTime = {
+    // Unix timestamp in nanoseconds from 1970-01-01 00:00:00 UTC
+    timestamp_nanos: i64,
+    // Timezone offset in minutes from UTC
+    timezone_offset_mins: i32
+}
+
+// ============================================================================
+// DateTime constructors
+// ============================================================================
+
+spec fn now() -> DateTime
+  ensures:
+    result.timestamp_nanos >= 0
+    // Cannot specify exact value as it depends on current time
+
+spec pure fn from_unix_timestamp(secs: i64) -> DateTime
+  ensures:
+    result.timestamp_nanos == secs * 1_000_000_000
+    result.timezone_offset_mins == 0  // UTC
+
+spec pure fn from_unix_timestamp_millis(millis: i64) -> DateTime
+  ensures:
+    result.timestamp_nanos == millis * 1_000_000
+    result.timezone_offset_mins == 0
+
+spec pure fn from_unix_timestamp_nanos(nanos: i64) -> DateTime
+  ensures:
+    result.timestamp_nanos == nanos
+    result.timezone_offset_mins == 0
+
+spec pure fn from_components(
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+    timezone_offset_mins: i32
+) -> Option[DateTime]
+  requires:
+    month >= 1 and month <= 12
+    day >= 1 and day <= 31
+    hour >= 0 and hour <= 23
+    minute >= 0 and minute <= 59
+    second >= 0 and second <= 59
+    timezone_offset_mins >= -720 and timezone_offset_mins <= 840
+  ensures:
+    result.is_some() =>
+        result.unwrap().year() == year and
+        result.unwrap().month() == month and
+        result.unwrap().day() == day
+
+// ============================================================================
+// DateTime accessors - date components
+// ============================================================================
+
+spec pure fn year(self: DateTime) -> i32
+
+spec pure fn month(self: DateTime) -> i32
+  ensures: result >= 1 and result <= 12
+
+spec pure fn day(self: DateTime) -> i32
+  ensures: result >= 1 and result <= 31
+
+spec pure fn day_of_year(self: DateTime) -> i32
+  ensures: result >= 1 and result <= 366
+
+spec pure fn day_of_week(self: DateTime) -> DayOfWeek
+
+spec pure fn week_of_year(self: DateTime) -> i32
+  ensures: result >= 1 and result <= 53
+
+spec pure fn is_leap_year(self: DateTime) -> bool
+  ensures:
+    result == (self.year() % 4 == 0 and (self.year() % 100 != 0 or self.year() % 400 == 0))
+
+// ============================================================================
+// DateTime accessors - time components
+// ============================================================================
+
+spec pure fn hour(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 23
+
+spec pure fn minute(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 59
+
+spec pure fn second(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 59
+
+spec pure fn millisecond(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 999
+
+spec pure fn microsecond(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 999999
+
+spec pure fn nanosecond(self: DateTime) -> i32
+  ensures: result >= 0 and result <= 999999999
+
+// ============================================================================
+// DateTime accessors - timezone
+// ============================================================================
+
+spec pure fn timezone_offset(self: DateTime) -> Duration
+  ensures: result.as_mins() == self.timezone_offset_mins
+
+spec pure fn is_utc(self: DateTime) -> bool
+  ensures: result == (self.timezone_offset_mins == 0)
+
+// ============================================================================
+// DateTime arithmetic
+// ============================================================================
+
+spec pure fn add_duration(self: DateTime, duration: Duration) -> DateTime
+  ensures:
+    result.timestamp_nanos == self.timestamp_nanos + duration.nanos
+    result.timezone_offset_mins == self.timezone_offset_mins
+
+spec pure fn subtract_duration(self: DateTime, duration: Duration) -> DateTime
+  ensures:
+    result.timestamp_nanos == self.timestamp_nanos - duration.nanos
+    result.timezone_offset_mins == self.timezone_offset_mins
+
+spec pure fn duration_since(self: DateTime, other: DateTime) -> Duration
+  ensures: result.nanos == self.timestamp_nanos - other.timestamp_nanos
+
+spec pure fn duration_until(self: DateTime, other: DateTime) -> Duration
+  ensures: result.nanos == other.timestamp_nanos - self.timestamp_nanos
+
+// Calendar arithmetic (handles month/year boundaries)
+spec pure fn add_days(self: DateTime, days: i32) -> DateTime
+  ensures: result.day_of_year() == (self.day_of_year() + days - 1) % 365 + 1  // Simplified
+
+spec pure fn add_months(self: DateTime, months: i32) -> DateTime
+  ensures: result.month() == ((self.month() - 1 + months) % 12) + 1  // Simplified
+
+spec pure fn add_years(self: DateTime, years: i32) -> DateTime
+  ensures: result.year() == self.year() + years
+
+// ============================================================================
+// DateTime comparison
+// ============================================================================
+
+spec impl Eq for DateTime {
+    pure fn eq(self, other: Self) -> bool
+      ensures: result == (self.timestamp_nanos == other.timestamp_nanos)
+}
+
+spec impl Ord for DateTime {
+    pure fn compare(self, other: Self) -> Ordering
+      ensures:
+        self.timestamp_nanos < other.timestamp_nanos => result == Less
+        self.timestamp_nanos > other.timestamp_nanos => result == Greater
+        self.timestamp_nanos == other.timestamp_nanos => result == Equal
+}
+
+spec pure fn before(self: DateTime, other: DateTime) -> bool
+  ensures: result == (self.timestamp_nanos < other.timestamp_nanos)
+
+spec pure fn after(self: DateTime, other: DateTime) -> bool
+  ensures: result == (self.timestamp_nanos > other.timestamp_nanos)
+
+// ============================================================================
+// DateTime timezone conversion
+// ============================================================================
+
+spec pure fn to_utc(self: DateTime) -> DateTime
+  ensures:
+    result.timestamp_nanos == self.timestamp_nanos
+    result.timezone_offset_mins == 0
+
+spec pure fn with_timezone(self: DateTime, offset_mins: i32) -> DateTime
+  requires: offset_mins >= -720 and offset_mins <= 840
+  ensures:
+    result.timestamp_nanos == self.timestamp_nanos
+    result.timezone_offset_mins == offset_mins
+
+// ============================================================================
+// DateTime formatting and parsing
+// ============================================================================
+
+spec pure fn format(self: DateTime, pattern: string) -> string
+
+spec pure fn format_iso8601(self: DateTime) -> string
+  ensures:
+    // Format: "2024-01-15T10:30:00Z" or "2024-01-15T10:30:00+05:00"
+
+spec pure fn format_rfc3339(self: DateTime) -> string
+
+spec pure fn parse(input: string, pattern: string) -> Option[DateTime]
+
+spec pure fn parse_iso8601(input: string) -> Option[DateTime]
+
+spec pure fn parse_rfc3339(input: string) -> Option[DateTime]
+
+// ============================================================================
+// DateTime predicates
+// ============================================================================
+
+spec pure fn is_past(self: DateTime) -> bool
+  ensures: result == self.before(now())
+
+spec pure fn is_future(self: DateTime) -> bool
+  ensures: result == self.after(now())
+
+spec pure fn is_today(self: DateTime) -> bool
+
+spec pure fn is_weekend(self: DateTime) -> bool
+  ensures: result == (self.day_of_week() == Saturday or self.day_of_week() == Sunday)
+
+spec pure fn is_weekday(self: DateTime) -> bool
+  ensures: result == not self.is_weekend()
+
+// ============================================================================
+// Date extraction
+// ============================================================================
+
+spec pure fn date(self: DateTime) -> Date
+  ensures:
+    result.year == self.year()
+    result.month == self.month()
+    result.day == self.day()
+
+spec pure fn time(self: DateTime) -> Time
+  ensures:
+    result.hour == self.hour()
+    result.minute == self.minute()
+    result.second == self.second()
+    result.nanosecond == self.nanosecond()
+
+// ============================================================================
+// Supporting types
+// ============================================================================
+
+type DayOfWeek =
+    | Monday
+    | Tuesday
+    | Wednesday
+    | Thursday
+    | Friday
+    | Saturday
+    | Sunday
+
+type Month =
+    | January
+    | February
+    | March
+    | April
+    | May
+    | June
+    | July
+    | August
+    | September
+    | October
+    | November
+    | December
+
+type Date = {
+    year: i32,
+    month: i32,
+    day: i32
+}
+  invariant:
+    self.month >= 1 and self.month <= 12
+    self.day >= 1 and self.day <= 31
+
+type Time = {
+    hour: i32,
+    minute: i32,
+    second: i32,
+    nanosecond: i32
+}
+  invariant:
+    self.hour >= 0 and self.hour <= 23
+    self.minute >= 0 and self.minute <= 59
+    self.second >= 0 and self.second <= 59
+    self.nanosecond >= 0 and self.nanosecond <= 999999999
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom time_monotonic:
+    forall t1, t2: DateTime:
+        t1.before(t2) => not t2.before(t1)
+
+axiom duration_add_inverse:
+    forall d: Duration:
+        d.add(d.negate()).is_zero()
+
+axiom datetime_duration_roundtrip:
+    forall dt: DateTime, d: Duration:
+        dt.add_duration(d).subtract_duration(d) == dt
+
+axiom duration_add_commutative:
+    forall a, b: Duration:
+        a.add(b) == b.add(a)
+
+axiom duration_add_associative:
+    forall a, b, c: Duration:
+        a.add(b).add(c) == a.add(b.add(c))
+
+// ============================================================================
+// Utility constants
+// ============================================================================
+
+const NANOS_PER_MICRO: i64 = 1000
+const NANOS_PER_MILLI: i64 = 1_000_000
+const NANOS_PER_SEC: i64 = 1_000_000_000
+const NANOS_PER_MIN: i64 = 60 * 1_000_000_000
+const NANOS_PER_HOUR: i64 = 3600 * 1_000_000_000
+const NANOS_PER_DAY: i64 = 86400 * 1_000_000_000
+
+// ============================================================================
+// Range and interval types
+// ============================================================================
+
+type DateRange = {
+    start: DateTime,
+    end: DateTime
+}
+  invariant: self.start.before(self.end) or self.start == self.end
+
+spec pure fn duration(self: DateRange) -> Duration
+  ensures: result == self.end.duration_since(self.start)
+
+spec pure fn contains(self: DateRange, dt: DateTime) -> bool
+  ensures:
+    result == (not dt.before(self.start) and dt.before(self.end))
+
+spec pure fn overlaps(self: DateRange, other: DateRange) -> bool
+  ensures:
+    result == (self.start.before(other.end) and other.start.before(self.end))
+
+spec pure fn intersection(self: DateRange, other: DateRange) -> Option[DateRange]
+  ensures:
+    self.overlaps(other) =>
+        result.is_some() and
+        result.unwrap().start == max(self.start, other.start) and
+        result.unwrap().end == min(self.end, other.end)
+    not self.overlaps(other) => result.is_none()

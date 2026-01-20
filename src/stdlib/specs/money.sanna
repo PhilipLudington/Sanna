@@ -1,0 +1,330 @@
+module std.money
+
+import std.ordering.{Ord, Eq, Ordering}
+
+// ============================================================================
+// Currency - Currency code type
+// ============================================================================
+
+type Currency = string
+  invariant:
+    self.length == 3  // ISO 4217 codes are 3 characters
+    self.is_uppercase()
+
+// Common currency constants
+const USD: Currency = "USD"
+const EUR: Currency = "EUR"
+const GBP: Currency = "GBP"
+const JPY: Currency = "JPY"
+const CHF: Currency = "CHF"
+const CAD: Currency = "CAD"
+const AUD: Currency = "AUD"
+const CNY: Currency = "CNY"
+
+// ============================================================================
+// Money - Monetary amount with currency
+// ============================================================================
+
+type Money = {
+    // Amount in smallest unit (cents, pence, etc.)
+    cents: i64,
+    currency: Currency
+}
+  invariant: self.cents >= 0 or self.is_negative_allowed()
+
+// ============================================================================
+// Constructors
+// ============================================================================
+
+spec pure fn zero(currency: Currency) -> Money
+  ensures:
+    result.cents == 0
+    result.currency == currency
+
+spec pure fn from_cents(cents: i64, currency: Currency) -> Money
+  requires: cents >= 0
+  ensures:
+    result.cents == cents
+    result.currency == currency
+
+spec pure fn from_units(units: i64, currency: Currency) -> Money
+  requires: units >= 0
+  ensures:
+    result.cents == units * currency.minor_unit_factor()
+    result.currency == currency
+
+spec pure fn from_decimal(amount: f64, currency: Currency) -> Money
+  requires: amount >= 0.0
+  ensures:
+    result.currency == currency
+    // Rounds to nearest cent
+    result.cents == round(amount * currency.minor_unit_factor())
+
+// ============================================================================
+// Accessors
+// ============================================================================
+
+spec pure fn cents(self: Money) -> i64
+  ensures: result == self.cents
+
+spec pure fn currency(self: Money) -> Currency
+  ensures: result == self.currency
+
+spec pure fn units(self: Money) -> i64
+  ensures: result == self.cents / self.currency.minor_unit_factor()
+
+spec pure fn fractional(self: Money) -> i64
+  ensures: result == self.cents % self.currency.minor_unit_factor()
+
+spec pure fn to_decimal(self: Money) -> f64
+  ensures: result == self.cents / self.currency.minor_unit_factor()
+
+// ============================================================================
+// Predicates
+// ============================================================================
+
+spec pure fn is_zero(self: Money) -> bool
+  ensures: result == (self.cents == 0)
+
+spec pure fn is_positive(self: Money) -> bool
+  ensures: result == (self.cents > 0)
+
+spec pure fn is_negative(self: Money) -> bool
+  ensures: result == (self.cents < 0)
+
+spec pure fn is_negative_allowed(self: Money) -> bool
+  // Some financial contexts allow negative money (debits, refunds)
+  ensures: result == false  // Default: not allowed
+
+spec pure fn same_currency(self: Money, other: Money) -> bool
+  ensures: result == (self.currency == other.currency)
+
+// ============================================================================
+// Arithmetic operations
+// ============================================================================
+
+spec pure fn add(self: Money, other: Money) -> Money
+  requires: self.same_currency(other)
+  ensures:
+    result.cents == self.cents + other.cents
+    result.currency == self.currency
+
+spec pure fn subtract(self: Money, other: Money) -> Money
+  requires:
+    self.same_currency(other)
+    self.cents >= other.cents  // Prevent negative unless allowed
+  ensures:
+    result.cents == self.cents - other.cents
+    result.currency == self.currency
+
+spec pure fn multiply(self: Money, factor: i64) -> Money
+  requires: factor >= 0 or self.is_negative_allowed()
+  ensures:
+    result.cents == self.cents * factor
+    result.currency == self.currency
+
+spec pure fn multiply_decimal(self: Money, factor: f64) -> Money
+  requires: factor >= 0.0 or self.is_negative_allowed()
+  ensures:
+    result.cents == round(self.cents * factor)
+    result.currency == self.currency
+
+spec pure fn divide(self: Money, divisor: i64) -> Money
+  requires: divisor != 0
+  ensures:
+    result.cents == self.cents / divisor
+    result.currency == self.currency
+
+spec pure fn negate(self: Money) -> Money
+  requires: self.is_negative_allowed() or self.is_zero()
+  ensures:
+    result.cents == -self.cents
+    result.currency == self.currency
+
+spec pure fn abs(self: Money) -> Money
+  ensures:
+    result.cents == if self.cents >= 0 then self.cents else -self.cents
+    result.currency == self.currency
+
+// ============================================================================
+// Comparison
+// ============================================================================
+
+spec impl Eq for Money {
+    pure fn eq(self, other: Self) -> bool
+      ensures:
+        result == (self.cents == other.cents and self.currency == other.currency)
+}
+
+spec impl Ord for Money {
+    pure fn compare(self, other: Self) -> Ordering
+      requires: self.same_currency(other)
+      ensures:
+        self.cents < other.cents => result == Less
+        self.cents > other.cents => result == Greater
+        self.cents == other.cents => result == Equal
+}
+
+// ============================================================================
+// Allocation and splitting
+// ============================================================================
+
+spec pure fn allocate(self: Money, ratios: List[i64]) -> List[Money]
+  requires:
+    ratios.length > 0
+    forall r in ratios: r >= 0
+    ratios.sum() > 0
+  ensures:
+    result.length == ratios.length
+    forall m in result: m.currency == self.currency
+    result.map(|m| m.cents).sum() == self.cents
+    // Proportional (approximately)
+    forall i in 0..ratios.length:
+        result[i].cents >= (self.cents * ratios[i]) / ratios.sum() - 1
+        result[i].cents <= (self.cents * ratios[i]) / ratios.sum() + 1
+
+spec pure fn split(self: Money, n: i64) -> List[Money]
+  requires: n > 0
+  ensures:
+    result.length == n
+    forall m in result: m.currency == self.currency
+    result.map(|m| m.cents).sum() == self.cents
+    // Each part is approximately equal
+    forall i, j in 0..n: (result[i].cents - result[j].cents).abs() <= 1
+
+// ============================================================================
+// Rounding
+// ============================================================================
+
+type RoundingMode =
+    | RoundHalfUp
+    | RoundHalfDown
+    | RoundHalfEven  // Banker's rounding
+    | RoundUp
+    | RoundDown
+    | RoundTowardsZero
+
+spec pure fn round_to_units(self: Money, mode: RoundingMode) -> Money
+  ensures:
+    result.currency == self.currency
+    result.fractional() == 0
+
+spec pure fn round_to_precision(self: Money, decimal_places: i32, mode: RoundingMode) -> Money
+  requires: decimal_places >= 0
+  ensures: result.currency == self.currency
+
+// ============================================================================
+// Formatting
+// ============================================================================
+
+spec pure fn format(self: Money) -> string
+  ensures:
+    result.contains(self.currency)
+    // Format like "USD 123.45" or "$123.45"
+
+spec pure fn format_with_symbol(self: Money) -> string
+  ensures:
+    // Uses currency symbol like "$", "€", "£"
+
+// ============================================================================
+// Currency operations
+// ============================================================================
+
+spec pure fn minor_unit_factor(currency: Currency) -> i64
+  ensures:
+    // Most currencies use 100 (cents)
+    currency == "JPY" => result == 1
+    currency == "KWD" => result == 1000  // 3 decimal places
+    result == 100  // Default for most currencies
+
+spec pure fn convert(self: Money, to_currency: Currency, rate: f64) -> Money
+  requires: rate > 0.0
+  ensures:
+    result.currency == to_currency
+    result.cents == round(self.cents * rate * to_currency.minor_unit_factor() / self.currency.minor_unit_factor())
+
+// ============================================================================
+// Percentage operations
+// ============================================================================
+
+type Percentage = f64
+  invariant: self >= 0.0 and self <= 100.0
+
+spec pure fn percentage_of(self: Money, percentage: Percentage) -> Money
+  ensures:
+    result.currency == self.currency
+    result.cents == round(self.cents * percentage / 100.0)
+
+spec pure fn add_percentage(self: Money, percentage: Percentage) -> Money
+  ensures:
+    result.currency == self.currency
+    result.cents == round(self.cents * (1.0 + percentage / 100.0))
+
+spec pure fn subtract_percentage(self: Money, percentage: Percentage) -> Money
+  ensures:
+    result.currency == self.currency
+    result.cents == round(self.cents * (1.0 - percentage / 100.0))
+
+// ============================================================================
+// Tax calculations
+// ============================================================================
+
+spec pure fn with_tax(self: Money, tax_rate: Percentage) -> Money
+  ensures: result == self.add_percentage(tax_rate)
+
+spec pure fn tax_amount(self: Money, tax_rate: Percentage) -> Money
+  ensures: result == self.percentage_of(tax_rate)
+
+spec pure fn before_tax(self: Money, tax_rate: Percentage) -> Money
+  requires: tax_rate < 100.0
+  ensures:
+    result.currency == self.currency
+    result.with_tax(tax_rate).cents == self.cents  // May have rounding differences
+
+// ============================================================================
+// Invariants and axioms
+// ============================================================================
+
+invariant money_conservation:
+    forall a, b: Money:
+        a.same_currency(b) => a.add(b).cents == a.cents + b.cents
+
+axiom add_commutative:
+    forall a, b: Money:
+        a.same_currency(b) => a.add(b) == b.add(a)
+
+axiom add_associative:
+    forall a, b, c: Money:
+        a.same_currency(b) and b.same_currency(c) =>
+            a.add(b).add(c) == a.add(b.add(c))
+
+axiom add_zero_identity:
+    forall m: Money:
+        m.add(zero(m.currency)) == m
+
+axiom multiply_one_identity:
+    forall m: Money:
+        m.multiply(1) == m
+
+axiom multiply_zero:
+    forall m: Money:
+        m.multiply(0) == zero(m.currency)
+
+axiom split_conservation:
+    forall m: Money, n: i64:
+        n > 0 => m.split(n).map(|x| x.cents).sum() == m.cents
+
+// ============================================================================
+// Lemmas for verification
+// ============================================================================
+
+lemma no_money_creation:
+    forall a, b: Money:
+        a.same_currency(b) =>
+            a.add(b).cents == a.cents + b.cents and
+            a.subtract(b).cents == a.cents - b.cents
+
+lemma positive_after_positive_add:
+    forall a, b: Money:
+        a.same_currency(b) and a.is_positive() and b.is_positive() =>
+            a.add(b).is_positive()

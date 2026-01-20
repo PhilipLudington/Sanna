@@ -1,0 +1,369 @@
+module std.crypto
+
+import std.ordering.{Eq}
+
+// ============================================================================
+// Hash - Cryptographic hash value
+// ============================================================================
+
+type Hash = {
+    // Raw bytes of the hash
+    bytes: Array[u8],
+    // Algorithm used to produce this hash
+    algorithm: HashAlgorithm
+}
+  invariant: self.bytes.length == self.algorithm.output_length()
+
+type HashAlgorithm =
+    | SHA256
+    | SHA384
+    | SHA512
+    | SHA3_256
+    | SHA3_512
+    | BLAKE2b
+    | BLAKE2s
+    | BLAKE3
+    | MD5       // Deprecated, included for legacy compatibility
+    | SHA1      // Deprecated, included for legacy compatibility
+
+// ============================================================================
+// Hash algorithm properties
+// ============================================================================
+
+spec pure fn output_length(self: HashAlgorithm) -> usize
+  ensures:
+    match self {
+        SHA256 => result == 32
+        SHA384 => result == 48
+        SHA512 => result == 64
+        SHA3_256 => result == 32
+        SHA3_512 => result == 64
+        BLAKE2b => result == 64
+        BLAKE2s => result == 32
+        BLAKE3 => result == 32
+        MD5 => result == 16
+        SHA1 => result == 20
+    }
+
+spec pure fn is_secure(self: HashAlgorithm) -> bool
+  ensures:
+    match self {
+        MD5 => result == false      // Collision attacks known
+        SHA1 => result == false     // Collision attacks known
+        _ => result == true
+    }
+
+spec pure fn is_recommended(self: HashAlgorithm) -> bool
+  ensures:
+    match self {
+        SHA256 => result == true
+        SHA3_256 => result == true
+        BLAKE3 => result == true
+        _ => result == false
+    }
+
+// ============================================================================
+// Hashing functions
+// ============================================================================
+
+spec pure fn hash(data: Array[u8], algorithm: HashAlgorithm) -> Hash
+  ensures:
+    result.algorithm == algorithm
+    result.bytes.length == algorithm.output_length()
+
+spec pure fn hash_string(data: string, algorithm: HashAlgorithm) -> Hash
+  ensures:
+    result.algorithm == algorithm
+    result.bytes.length == algorithm.output_length()
+
+// Convenience functions for common algorithms
+spec pure fn sha256(data: Array[u8]) -> Hash
+  ensures: result == hash(data, SHA256)
+
+spec pure fn sha512(data: Array[u8]) -> Hash
+  ensures: result == hash(data, SHA512)
+
+spec pure fn blake3(data: Array[u8]) -> Hash
+  ensures: result == hash(data, BLAKE3)
+
+// ============================================================================
+// Hash comparison
+// ============================================================================
+
+spec impl Eq for Hash {
+    pure fn eq(self, other: Self) -> bool
+      ensures:
+        self.algorithm != other.algorithm => result == false
+        self.algorithm == other.algorithm =>
+            result == (self.bytes == other.bytes)
+}
+
+// Constant-time comparison to prevent timing attacks
+spec pure fn constant_time_eq(self: Hash, other: Hash) -> bool
+  ensures: result == self.eq(other)
+  // Implementation must not branch based on byte values
+
+// ============================================================================
+// Hash formatting
+// ============================================================================
+
+spec pure fn to_hex(self: Hash) -> string
+  ensures:
+    result.length == self.bytes.length * 2
+    forall c in result: c.is_hex_digit()
+
+spec pure fn from_hex(hex: string, algorithm: HashAlgorithm) -> Option[Hash]
+  ensures:
+    hex.length != algorithm.output_length() * 2 => result == None
+    result.is_some() => result.unwrap().to_hex() == hex.to_lowercase()
+
+spec pure fn to_base64(self: Hash) -> string
+
+spec pure fn from_base64(b64: string, algorithm: HashAlgorithm) -> Option[Hash]
+
+// ============================================================================
+// Salt - Random value for password hashing
+// ============================================================================
+
+type Salt = {
+    bytes: Array[u8]
+}
+  invariant: self.bytes.length >= 16  // Minimum 128 bits
+
+// ============================================================================
+// Salt generation
+// ============================================================================
+
+spec fn generate_salt(length: usize) -> Salt
+  requires: length >= 16
+  ensures:
+    result.bytes.length == length
+    result.is_cryptographically_random()
+
+spec fn generate_salt_default() -> Salt
+  ensures:
+    result.bytes.length == 32  // 256 bits
+    result.is_cryptographically_random()
+
+// ============================================================================
+// Salt properties
+// ============================================================================
+
+spec pure fn length(self: Salt) -> usize
+  ensures: result == self.bytes.length
+
+spec pure fn is_cryptographically_random(self: Salt) -> bool
+  // Cannot be directly verified, but asserted by generation
+
+spec pure fn to_hex(self: Salt) -> string
+  ensures: result.length == self.bytes.length * 2
+
+spec pure fn from_hex(hex: string) -> Option[Salt]
+  ensures:
+    hex.length < 32 => result == None  // Minimum 16 bytes = 32 hex chars
+    result.is_some() => result.unwrap().to_hex() == hex.to_lowercase()
+
+// ============================================================================
+// Password hashing
+// ============================================================================
+
+type PasswordHash = {
+    hash: Hash,
+    salt: Salt,
+    algorithm: PasswordHashAlgorithm,
+    params: PasswordHashParams
+}
+
+type PasswordHashAlgorithm =
+    | Bcrypt
+    | Argon2id
+    | Argon2i
+    | Argon2d
+    | PBKDF2_SHA256
+    | PBKDF2_SHA512
+    | Scrypt
+
+type PasswordHashParams = {
+    // Time/iteration cost
+    time_cost: u32,
+    // Memory cost (for memory-hard functions)
+    memory_cost_kb: u32,
+    // Parallelism
+    parallelism: u32,
+    // Output length
+    output_length: u32
+}
+
+// Default parameters for each algorithm
+spec pure fn default_params(algorithm: PasswordHashAlgorithm) -> PasswordHashParams
+  ensures:
+    match algorithm {
+        Bcrypt => result.time_cost == 12 and result.memory_cost_kb == 0
+        Argon2id => result.time_cost == 3 and result.memory_cost_kb == 65536 and result.parallelism == 4
+        PBKDF2_SHA256 => result.time_cost == 600000 and result.memory_cost_kb == 0
+        _ => true
+    }
+
+// ============================================================================
+// Password hashing operations
+// ============================================================================
+
+spec fn hash_password(password: string, algorithm: PasswordHashAlgorithm) -> PasswordHash
+  ensures:
+    result.algorithm == algorithm
+    result.salt.is_cryptographically_random()
+
+spec fn hash_password_with_params(
+    password: string,
+    algorithm: PasswordHashAlgorithm,
+    params: PasswordHashParams
+) -> PasswordHash
+  ensures:
+    result.algorithm == algorithm
+    result.params == params
+
+spec fn hash_password_with_salt(
+    password: string,
+    salt: Salt,
+    algorithm: PasswordHashAlgorithm,
+    params: PasswordHashParams
+) -> PasswordHash
+  ensures:
+    result.salt == salt
+    result.algorithm == algorithm
+    result.params == params
+
+spec pure fn verify_password(password: string, hash: PasswordHash) -> bool
+  ensures:
+    // Returns true iff password produces same hash
+    result == (hash_password_with_salt(password, hash.salt, hash.algorithm, hash.params).hash == hash.hash)
+
+// ============================================================================
+// Password hash formatting (PHC string format)
+// ============================================================================
+
+spec pure fn to_phc_string(self: PasswordHash) -> string
+  ensures:
+    // Format: $algorithm$params$salt$hash
+    result.starts_with("$")
+
+spec pure fn from_phc_string(s: string) -> Option[PasswordHash]
+  ensures:
+    not s.starts_with("$") => result == None
+
+// ============================================================================
+// HMAC - Hash-based Message Authentication Code
+// ============================================================================
+
+type HMAC = {
+    bytes: Array[u8],
+    algorithm: HashAlgorithm
+}
+
+spec pure fn hmac(key: Array[u8], message: Array[u8], algorithm: HashAlgorithm) -> HMAC
+  ensures:
+    result.algorithm == algorithm
+    result.bytes.length == algorithm.output_length()
+
+spec pure fn hmac_sha256(key: Array[u8], message: Array[u8]) -> HMAC
+  ensures: result == hmac(key, message, SHA256)
+
+spec pure fn verify_hmac(key: Array[u8], message: Array[u8], expected: HMAC) -> bool
+  ensures: result == (hmac(key, message, expected.algorithm) == expected)
+
+// ============================================================================
+// Key Derivation
+// ============================================================================
+
+spec pure fn hkdf(
+    secret: Array[u8],
+    salt: Option[Salt],
+    info: Array[u8],
+    length: usize,
+    algorithm: HashAlgorithm
+) -> Array[u8]
+  ensures: result.length == length
+
+spec pure fn pbkdf2(
+    password: string,
+    salt: Salt,
+    iterations: u32,
+    length: usize,
+    algorithm: HashAlgorithm
+) -> Array[u8]
+  requires: iterations > 0
+  ensures: result.length == length
+
+// ============================================================================
+// Random bytes
+// ============================================================================
+
+spec fn random_bytes(length: usize) -> Array[u8]
+  ensures:
+    result.length == length
+    // Cryptographically secure random
+
+spec fn random_u64() -> u64
+  // Cryptographically secure random
+
+spec fn random_u32() -> u32
+  // Cryptographically secure random
+
+// ============================================================================
+// Secure comparison
+// ============================================================================
+
+spec pure fn constant_time_compare(a: Array[u8], b: Array[u8]) -> bool
+  ensures: result == (a == b)
+  // Implementation must execute in constant time regardless of content
+
+// ============================================================================
+// Secure memory operations
+// ============================================================================
+
+spec fn secure_zero(buffer: Array[u8]) -> ()
+  ensures: forall i in 0..buffer.length: buffer[i] == 0
+  modifies: buffer
+  // Must not be optimized away by compiler
+
+// ============================================================================
+// Axioms and security properties
+// ============================================================================
+
+axiom hash_deterministic:
+    forall d: Array[u8], a: HashAlgorithm:
+        hash(d, a) == hash(d, a)
+
+axiom hash_collision_resistant:
+    forall d1, d2: Array[u8], a: HashAlgorithm:
+        a.is_secure() and d1 != d2 =>
+            hash(d1, a) != hash(d2, a)  // With overwhelming probability
+
+axiom preimage_resistant:
+    forall h: Hash:
+        h.algorithm.is_secure() =>
+            not exists compute_preimage: fn(Hash) -> Array[u8]
+
+axiom salt_uniqueness:
+    forall s1, s2: Salt:
+        s1.is_cryptographically_random() and s2.is_cryptographically_random() and s1 != s2 =>
+            true  // Different calls to generate_salt produce different values (with overwhelming probability)
+
+axiom password_hash_slow:
+    // Password hashing should be computationally expensive
+    forall p: string, a: PasswordHashAlgorithm:
+        hash_password(p, a).params.time_cost >= 1
+
+// ============================================================================
+// Invariants
+// ============================================================================
+
+invariant no_plaintext_storage:
+    // Passwords should never be stored in plaintext
+    forall stored_credential: PasswordHash:
+        stored_credential.salt.length >= 16
+
+invariant secure_algorithm_usage:
+    // New code should use secure algorithms
+    forall h: Hash:
+        h.algorithm.is_secure()  // Warn if using MD5 or SHA1

@@ -14,6 +14,7 @@ pub const provenance = @import("provenance/root.zig");
 pub const trust = @import("trust/root.zig");
 pub const codegen = @import("codegen/root.zig");
 pub const cli = @import("cli/root.zig");
+pub const stdlib = @import("stdlib/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -74,6 +75,9 @@ pub const MockGenerator = codegen.MockGenerator;
 pub const GenerationPipeline = codegen.GenerationPipeline;
 pub const CheckpointManager = codegen.CheckpointManager;
 
+// Re-export commonly used types from standard library
+pub const StandardLibrary = stdlib.StandardLibrary;
+
 test {
     _ = lexer;
     _ = parser;
@@ -84,4 +88,5 @@ test {
     _ = trust;
     _ = codegen;
     _ = cli;
+    _ = stdlib;
 }

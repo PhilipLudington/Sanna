@@ -1,0 +1,337 @@
+module std.option
+
+// ============================================================================
+// Option[T] - Optional value type
+// ============================================================================
+
+type Option[T] =
+    | Some(T)
+    | None
+
+// ============================================================================
+// Constructors
+// ============================================================================
+
+spec pure fn some[T](value: T) -> Option[T]
+  ensures: result == Some(value)
+
+spec pure fn none[T]() -> Option[T]
+  ensures: result == None
+
+// ============================================================================
+// Predicates
+// ============================================================================
+
+spec pure fn is_some[T](self: Option[T]) -> bool
+  ensures:
+    match self {
+        Some(_) => result == true
+        None => result == false
+    }
+
+spec pure fn is_none[T](self: Option[T]) -> bool
+  ensures: result == not self.is_some()
+
+spec pure fn is_some_and[T](self: Option[T], pred: fn(T) -> bool) -> bool
+  ensures:
+    match self {
+        Some(t) => result == pred(t)
+        None => result == false
+    }
+
+// ============================================================================
+// Accessors
+// ============================================================================
+
+spec pure fn unwrap[T](self: Option[T]) -> T
+  requires: self.is_some()
+  ensures:
+    match self {
+        Some(t) => result == t
+        None => false  // unreachable due to requires
+    }
+
+spec pure fn unwrap_or[T](self: Option[T], default: T) -> T
+  ensures:
+    match self {
+        Some(t) => result == t
+        None => result == default
+    }
+
+spec pure fn unwrap_or_else[T](self: Option[T], f: fn() -> T) -> T
+  ensures:
+    match self {
+        Some(t) => result == t
+        None => result == f()
+    }
+
+spec pure fn unwrap_or_default[T: Default](self: Option[T]) -> T
+  ensures:
+    match self {
+        Some(t) => result == t
+        None => result == T.default()
+    }
+
+spec pure fn expect[T](self: Option[T], msg: string) -> T
+  requires: self.is_some()
+  ensures: result == self.unwrap()
+
+// ============================================================================
+// Transformations
+// ============================================================================
+
+spec pure fn map[T, U](self: Option[T], f: fn(T) -> U) -> Option[U]
+  ensures:
+    match self {
+        Some(t) => result == Some(f(t))
+        None => result == None
+    }
+
+spec pure fn map_or[T, U](self: Option[T], default: U, f: fn(T) -> U) -> U
+  ensures:
+    match self {
+        Some(t) => result == f(t)
+        None => result == default
+    }
+
+spec pure fn map_or_else[T, U](self: Option[T], default: fn() -> U, f: fn(T) -> U) -> U
+  ensures:
+    match self {
+        Some(t) => result == f(t)
+        None => result == default()
+    }
+
+// ============================================================================
+// Chaining / Monadic operations
+// ============================================================================
+
+spec pure fn and_then[T, U](self: Option[T], f: fn(T) -> Option[U]) -> Option[U]
+  ensures:
+    match self {
+        Some(t) => result == f(t)
+        None => result == None
+    }
+
+spec pure fn or_else[T](self: Option[T], f: fn() -> Option[T]) -> Option[T]
+  ensures:
+    match self {
+        Some(t) => result == Some(t)
+        None => result == f()
+    }
+
+spec pure fn and[T, U](self: Option[T], opt: Option[U]) -> Option[U]
+  ensures:
+    match self {
+        Some(_) => result == opt
+        None => result == None
+    }
+
+spec pure fn or[T](self: Option[T], opt: Option[T]) -> Option[T]
+  ensures:
+    match self {
+        Some(t) => result == Some(t)
+        None => result == opt
+    }
+
+spec pure fn xor[T](self: Option[T], opt: Option[T]) -> Option[T]
+  ensures:
+    match (self, opt) {
+        (Some(t), None) => result == Some(t)
+        (None, Some(t)) => result == Some(t)
+        _ => result == None
+    }
+
+// ============================================================================
+// Filtering
+// ============================================================================
+
+spec pure fn filter[T](self: Option[T], pred: fn(T) -> bool) -> Option[T]
+  ensures:
+    match self {
+        Some(t) => if pred(t) then result == Some(t) else result == None
+        None => result == None
+    }
+
+// ============================================================================
+// Zipping
+// ============================================================================
+
+spec pure fn zip[T, U](self: Option[T], other: Option[U]) -> Option[(T, U)]
+  ensures:
+    match (self, other) {
+        (Some(t), Some(u)) => result == Some((t, u))
+        _ => result == None
+    }
+
+spec pure fn zip_with[T, U, R](self: Option[T], other: Option[U], f: fn(T, U) -> R) -> Option[R]
+  ensures:
+    match (self, other) {
+        (Some(t), Some(u)) => result == Some(f(t, u))
+        _ => result == None
+    }
+
+spec pure fn unzip[T, U](self: Option[(T, U)]) -> (Option[T], Option[U])
+  ensures:
+    match self {
+        Some((t, u)) => result == (Some(t), Some(u))
+        None => result == (None, None)
+    }
+
+// ============================================================================
+// Inspection
+// ============================================================================
+
+spec fn inspect[T](self: Option[T], f: fn(T) -> ()) -> Option[T]
+  ensures: result == self
+
+// ============================================================================
+// Flattening
+// ============================================================================
+
+spec pure fn flatten[T](self: Option[Option[T]]) -> Option[T]
+  ensures:
+    match self {
+        Some(Some(t)) => result == Some(t)
+        Some(None) => result == None
+        None => result == None
+    }
+
+// ============================================================================
+// Result conversion
+// ============================================================================
+
+spec pure fn ok_or[T, E](self: Option[T], err: E) -> Result[T, E]
+  ensures:
+    match self {
+        Some(t) => result == Ok(t)
+        None => result == Err(err)
+    }
+
+spec pure fn ok_or_else[T, E](self: Option[T], f: fn() -> E) -> Result[T, E]
+  ensures:
+    match self {
+        Some(t) => result == Ok(t)
+        None => result == Err(f())
+    }
+
+// ============================================================================
+// Transpose
+// ============================================================================
+
+spec pure fn transpose[T, E](self: Option[Result[T, E]]) -> Result[Option[T], E]
+  ensures:
+    match self {
+        Some(Ok(t)) => result == Ok(Some(t))
+        Some(Err(e)) => result == Err(e)
+        None => result == Ok(None)
+    }
+
+// ============================================================================
+// Comparison (when T is comparable)
+// ============================================================================
+
+spec pure fn eq[T: Eq](self: Option[T], other: Option[T]) -> bool
+  ensures:
+    match (self, other) {
+        (Some(t1), Some(t2)) => result == (t1 == t2)
+        (None, None) => result == true
+        _ => result == false
+    }
+
+// ============================================================================
+// Cloning
+// ============================================================================
+
+spec pure fn cloned[T: Clone](self: Option[T]) -> Option[T]
+  ensures:
+    match self {
+        Some(t) => result == Some(t.clone())
+        None => result == None
+    }
+
+spec pure fn copied[T: Copy](self: Option[T]) -> Option[T]
+  ensures: result == self
+
+// ============================================================================
+// Iteration / Collection
+// ============================================================================
+
+spec fn iter[T](self: Option[T]) -> Iterator[T]
+  ensures:
+    self.is_some() => result.count() == 1
+    self.is_none() => result.count() == 0
+
+spec pure fn collect_list[T](options: List[Option[T]]) -> Option[List[T]]
+  ensures:
+    forall opt in options: opt.is_none() => result.is_none()
+    forall opt in options: opt.is_some() =>
+        result.is_some() => result.unwrap().length == options.length
+
+// ============================================================================
+// Replace operations
+// ============================================================================
+
+spec fn take[T](self: Option[T]) -> Option[T]
+  ensures:
+    result == old(self)
+    self == None
+  modifies: self
+
+spec fn replace[T](self: Option[T], value: T) -> Option[T]
+  ensures:
+    result == old(self)
+    self == Some(value)
+  modifies: self
+
+// ============================================================================
+// Getters for mutable access
+// ============================================================================
+
+spec fn get_or_insert[T](self: Option[T], value: T) -> T
+  ensures:
+    old(self.is_some()) => result == old(self.unwrap()) and self == old(self)
+    old(self.is_none()) => result == value and self == Some(value)
+  modifies: self
+
+spec fn get_or_insert_with[T](self: Option[T], f: fn() -> T) -> T
+  ensures:
+    old(self.is_some()) => result == old(self.unwrap()) and self == old(self)
+    old(self.is_none()) => result == f() and self == Some(result)
+  modifies: self
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom some_is_some[T]:
+    forall t: T: some(t).is_some()
+
+axiom none_is_none[T]:
+    none[T]().is_none()
+
+axiom some_unwrap[T]:
+    forall t: T: some(t).unwrap() == t
+
+axiom map_identity[T]:
+    forall opt: Option[T]: opt.map(|x| x) == opt
+
+axiom map_composition[T, U, V]:
+    forall opt: Option[T], f: fn(T) -> U, g: fn(U) -> V:
+        opt.map(f).map(g) == opt.map(|x| g(f(x)))
+
+axiom and_then_left_identity[T, U]:
+    forall t: T, f: fn(T) -> Option[U]:
+        some(t).and_then(f) == f(t)
+
+axiom and_then_right_identity[T]:
+    forall opt: Option[T]:
+        opt.and_then(|x| some(x)) == opt
+
+axiom flatten_some_some[T]:
+    forall t: T: some(some(t)).flatten() == some(t)
+
+axiom flatten_some_none[T]:
+    some(none[T]()).flatten() == none[T]()
+
+axiom flatten_none[T]:
+    none[Option[T]]().flatten() == none[T]()

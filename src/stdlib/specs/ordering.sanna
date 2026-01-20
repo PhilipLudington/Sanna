@@ -1,0 +1,288 @@
+module std.ordering
+
+// ============================================================================
+// Ordering - Comparison result type
+// ============================================================================
+
+type Ordering =
+    | Less
+    | Equal
+    | Greater
+
+// ============================================================================
+// Ordering operations
+// ============================================================================
+
+spec pure fn reverse(self: Ordering) -> Ordering
+  ensures:
+    match self {
+        Less => result == Greater
+        Equal => result == Equal
+        Greater => result == Less
+    }
+
+spec pure fn is_eq(self: Ordering) -> bool
+  ensures: result == (self == Equal)
+
+spec pure fn is_ne(self: Ordering) -> bool
+  ensures: result == (self != Equal)
+
+spec pure fn is_lt(self: Ordering) -> bool
+  ensures: result == (self == Less)
+
+spec pure fn is_gt(self: Ordering) -> bool
+  ensures: result == (self == Greater)
+
+spec pure fn is_le(self: Ordering) -> bool
+  ensures: result == (self == Less or self == Equal)
+
+spec pure fn is_ge(self: Ordering) -> bool
+  ensures: result == (self == Greater or self == Equal)
+
+spec pure fn then(self: Ordering, other: Ordering) -> Ordering
+  ensures:
+    match self {
+        Equal => result == other
+        _ => result == self
+    }
+
+spec pure fn then_with(self: Ordering, f: fn() -> Ordering) -> Ordering
+  ensures:
+    match self {
+        Equal => result == f()
+        _ => result == self
+    }
+
+// ============================================================================
+// Eq - Equality trait
+// ============================================================================
+
+spec interface Eq {
+    pure fn eq(self, other: Self) -> bool
+
+    pure fn ne(self, other: Self) -> bool
+      ensures: result == not self.eq(other)
+
+    // Required axioms for valid equality
+    axiom reflexive:
+        self.eq(self)
+
+    axiom symmetric:
+        self.eq(other) == other.eq(self)
+
+    axiom transitive:
+        self.eq(b) and b.eq(c) => self.eq(c)
+}
+
+// ============================================================================
+// PartialEq - Partial equality (may not be reflexive for all values)
+// ============================================================================
+
+spec interface PartialEq {
+    pure fn eq(self, other: Self) -> bool
+
+    pure fn ne(self, other: Self) -> bool
+      ensures: result == not self.eq(other)
+
+    // Only symmetric and transitive required
+    axiom symmetric:
+        self.eq(other) == other.eq(self)
+
+    axiom transitive:
+        self.eq(b) and b.eq(c) => self.eq(c)
+}
+
+// ============================================================================
+// Ord - Total ordering trait
+// ============================================================================
+
+spec interface Ord: Eq {
+    pure fn compare(self, other: Self) -> Ordering
+
+    pure fn lt(self, other: Self) -> bool
+      ensures: result == (self.compare(other) == Less)
+
+    pure fn le(self, other: Self) -> bool
+      ensures: result == (self.compare(other) != Greater)
+
+    pure fn gt(self, other: Self) -> bool
+      ensures: result == (self.compare(other) == Greater)
+
+    pure fn ge(self, other: Self) -> bool
+      ensures: result == (self.compare(other) != Less)
+
+    pure fn max(self, other: Self) -> Self
+      ensures:
+        result.ge(self) and result.ge(other)
+        result == self or result == other
+
+    pure fn min(self, other: Self) -> Self
+      ensures:
+        result.le(self) and result.le(other)
+        result == self or result == other
+
+    pure fn clamp(self, min: Self, max: Self) -> Self
+      requires: min.le(max)
+      ensures:
+        result.ge(min) and result.le(max)
+        self.lt(min) => result == min
+        self.gt(max) => result == max
+        self.ge(min) and self.le(max) => result == self
+
+    // Consistency with Eq
+    axiom eq_consistency:
+        self.eq(other) <=> self.compare(other) == Equal
+
+    // Total ordering axioms
+    axiom reflexive:
+        self.compare(self) == Equal
+
+    axiom antisymmetric:
+        self.compare(other) == Less <=> other.compare(self) == Greater
+
+    axiom transitive:
+        self.compare(b) == Less and b.compare(c) == Less
+            => self.compare(c) == Less
+
+    axiom total:
+        self.compare(other) == Less or
+        self.compare(other) == Equal or
+        self.compare(other) == Greater
+}
+
+// ============================================================================
+// PartialOrd - Partial ordering trait
+// ============================================================================
+
+spec interface PartialOrd: PartialEq {
+    pure fn partial_compare(self, other: Self) -> Option[Ordering]
+
+    pure fn lt(self, other: Self) -> bool
+      ensures: result == (self.partial_compare(other) == Some(Less))
+
+    pure fn le(self, other: Self) -> bool
+      ensures:
+        match self.partial_compare(other) {
+            Some(Less) => result == true
+            Some(Equal) => result == true
+            _ => result == false
+        }
+
+    pure fn gt(self, other: Self) -> bool
+      ensures: result == (self.partial_compare(other) == Some(Greater))
+
+    pure fn ge(self, other: Self) -> bool
+      ensures:
+        match self.partial_compare(other) {
+            Some(Greater) => result == true
+            Some(Equal) => result == true
+            _ => result == false
+        }
+
+    // Consistency with PartialEq
+    axiom eq_consistency:
+        self.partial_compare(other) == Some(Equal) => self.eq(other)
+
+    // Transitivity for comparable values
+    axiom transitive:
+        self.partial_compare(b) == Some(Less) and b.partial_compare(c) == Some(Less)
+            => self.partial_compare(c) == Some(Less)
+
+    // Duality
+    axiom duality:
+        self.partial_compare(other) == Some(Less) <=>
+            other.partial_compare(self) == Some(Greater)
+}
+
+// ============================================================================
+// Hash - Hashing trait
+// ============================================================================
+
+spec interface Hash {
+    pure fn hash(self) -> u64
+
+    // Equal values must have equal hashes
+    axiom hash_eq_consistency:
+        self: Eq => self.eq(other) => self.hash() == other.hash()
+}
+
+// ============================================================================
+// Utility functions
+// ============================================================================
+
+spec pure fn max[T: Ord](a: T, b: T) -> T
+  ensures:
+    result.ge(a) and result.ge(b)
+    result == a or result == b
+
+spec pure fn min[T: Ord](a: T, b: T) -> T
+  ensures:
+    result.le(a) and result.le(b)
+    result == a or result == b
+
+spec pure fn max_by[T](a: T, b: T, compare: fn(T, T) -> Ordering) -> T
+  ensures:
+    compare(result, a) != Less and compare(result, b) != Less
+    result == a or result == b
+
+spec pure fn min_by[T](a: T, b: T, compare: fn(T, T) -> Ordering) -> T
+  ensures:
+    compare(result, a) != Greater and compare(result, b) != Greater
+    result == a or result == b
+
+spec pure fn max_by_key[T, K: Ord](a: T, b: T, key: fn(T) -> K) -> T
+  ensures:
+    key(result).ge(key(a)) and key(result).ge(key(b))
+    result == a or result == b
+
+spec pure fn min_by_key[T, K: Ord](a: T, b: T, key: fn(T) -> K) -> T
+  ensures:
+    key(result).le(key(a)) and key(result).le(key(b))
+    result == a or result == b
+
+// ============================================================================
+// Reverse ordering wrapper
+// ============================================================================
+
+type Reverse[T] = { inner: T }
+
+spec pure fn reverse[T](value: T) -> Reverse[T]
+  ensures: result.inner == value
+
+spec impl Ord for Reverse[T] where T: Ord {
+    pure fn compare(self, other: Self) -> Ordering
+      ensures: result == other.inner.compare(self.inner)
+}
+
+spec impl Eq for Reverse[T] where T: Eq {
+    pure fn eq(self, other: Self) -> bool
+      ensures: result == self.inner.eq(other.inner)
+}
+
+// ============================================================================
+// Ordering axioms
+// ============================================================================
+
+axiom ordering_reverse_involutive:
+    forall o: Ordering: o.reverse().reverse() == o
+
+axiom ordering_then_associative:
+    forall a, b, c: Ordering: a.then(b).then(c) == a.then(b.then(c))
+
+axiom ordering_then_equal_identity:
+    forall o: Ordering: Equal.then(o) == o
+
+// ============================================================================
+// Derive helpers (for code generation)
+// ============================================================================
+
+// These lemmas help generate derived implementations
+
+lemma derive_eq_from_fields[T](a: T, b: T, fields_eq: bool):
+    fields_eq => a.eq(b)
+
+lemma derive_ord_from_fields[T](a: T, b: T, ordering: Ordering):
+    a.compare(b) == ordering
+
+lemma derive_hash_from_fields[T](value: T, combined_hash: u64):
+    value.hash() == combined_hash

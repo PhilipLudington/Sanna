@@ -137,17 +137,17 @@ Command-line interface for all Sanna operations.
 
 Built-in specifications for common patterns.
 
-- [ ] Implement std.collections.List specification
-- [ ] Implement std.collections.Map specification
-- [ ] Implement std.collections.Set specification
-- [ ] Implement std.result.Result specification with map, and_then, unwrap_or
-- [ ] Implement std.option.Option specification
-- [ ] Implement std.ordering.Ord specification with axioms
-- [ ] Implement std.ordering.Eq specification
-- [ ] Implement std.money.Money specification
-- [ ] Implement std.time.DateTime and Duration specifications
-- [ ] Implement std.crypto specifications (Hash, Salt)
-- [ ] Create standard library loading mechanism
+- [x] Implement std.collections.List specification
+- [x] Implement std.collections.Map specification
+- [x] Implement std.collections.Set specification
+- [x] Implement std.result.Result specification with map, and_then, unwrap_or
+- [x] Implement std.option.Option specification
+- [x] Implement std.ordering.Ord specification with axioms
+- [x] Implement std.ordering.Eq specification
+- [x] Implement std.money.Money specification
+- [x] Implement std.time.DateTime and Duration specifications
+- [x] Implement std.crypto specifications (Hash, Salt)
+- [x] Create standard library loading mechanism
 
 ## Phase 10: IDE Integration
 
