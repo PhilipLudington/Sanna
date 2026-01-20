@@ -10,6 +10,7 @@ pub const parser = @import("parser/root.zig");
 pub const types = @import("types/root.zig");
 pub const specs = @import("specs/root.zig");
 pub const verify = @import("verify/root.zig");
+pub const provenance = @import("provenance/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -43,10 +44,19 @@ pub const VerificationReport = verify.VerificationReport;
 pub const VerificationStatus = verify.VerificationStatus;
 pub const Z3Solver = verify.Z3Solver;
 
+// Re-export commonly used types from provenance system
+pub const ProvenanceMetadata = provenance.ProvenanceMetadata;
+pub const ProvenanceExtractor = provenance.ProvenanceExtractor;
+pub const ProvenanceStore = provenance.ProvenanceStore;
+pub const Author = provenance.Author;
+pub const AuthorKind = provenance.AuthorKind;
+pub const Confidence = provenance.Confidence;
+
 test {
     _ = lexer;
     _ = parser;
     _ = types;
     _ = specs;
     _ = verify;
+    _ = provenance;
 }

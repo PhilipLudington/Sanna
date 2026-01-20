@@ -17,6 +17,7 @@ const VerificationStatus = ProofObligation.VerificationStatus;
 const ObligationKind = ProofObligation.ObligationKind;
 const Z3Solver = @import("Z3Solver.zig");
 const Model = Z3Solver.Model;
+const ProvenanceMetadata = @import("../provenance/root.zig").ProvenanceMetadata;
 
 // ============================================================================
 // Verification Report
@@ -164,6 +165,8 @@ pub const VerificationResult = struct {
     time_ms: u64,
     /// Whether this result was cached
     from_cache: bool,
+    /// Provenance metadata (authorship, confidence, etc.)
+    provenance: ?*const ProvenanceMetadata = null,
 
     pub fn init(spec_name: []const u8) VerificationResult {
         return .{
@@ -175,6 +178,7 @@ pub const VerificationResult = struct {
             .diagnostics = .{},
             .time_ms = 0,
             .from_cache = false,
+            .provenance = null,
         };
     }
 

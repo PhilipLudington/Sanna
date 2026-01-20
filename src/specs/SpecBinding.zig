@@ -4,6 +4,7 @@ const Ast = @import("../parser/root.zig").Ast;
 const Type = @import("../types/root.zig").Type;
 const TypeContext = @import("../types/root.zig").TypeContext;
 const Span = @import("../lexer/root.zig").Span;
+const ProvenanceMetadata = @import("../provenance/root.zig").ProvenanceMetadata;
 
 // ============================================================================
 // Specification Binding
@@ -318,6 +319,8 @@ pub const BoundSpec = struct {
     implementation: ?ImplementationRef,
     /// Verification status
     verification_status: VerificationStatus,
+    /// Provenance metadata (authorship, confidence, approvals, etc.)
+    provenance: ?*const ProvenanceMetadata = null,
 };
 
 /// A reference to an implementation
@@ -342,6 +345,8 @@ pub const BoundInvariant = struct {
     condition: *const Ast.Expression,
     span: ?Span,
     verification_status: VerificationStatus,
+    /// Provenance metadata
+    provenance: ?*const ProvenanceMetadata = null,
 };
 
 /// A bound axiom
@@ -352,6 +357,8 @@ pub const BoundAxiom = struct {
     span: ?Span,
     is_trusted: bool,
     dependencies: []const []const u8,
+    /// Provenance metadata
+    provenance: ?*const ProvenanceMetadata = null,
 };
 
 /// A bound lemma
@@ -363,6 +370,8 @@ pub const BoundLemma = struct {
     verification_status: VerificationStatus,
     dependencies: []const []const u8,
     proof_hint: ?[]const u8,
+    /// Provenance metadata
+    provenance: ?*const ProvenanceMetadata = null,
 };
 
 /// Verification status for specifications

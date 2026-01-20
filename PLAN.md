@@ -77,16 +77,16 @@ SMT-based verification and proof obligation management.
 
 Track code authorship and AI confidence levels.
 
-- [ ] Define provenance metadata structures (human, AI, model, identity, etc.)
-- [ ] Implement @author attribute parsing and storage
-- [ ] Implement @confidence attribute parsing (0.0 - 1.0 scale)
-- [ ] Implement @needs_review attribute with reason tracking
-- [ ] Implement @approved attribute with by, at, and note fields
-- [ ] Implement @verified attribute with status and obligations
-- [ ] Implement @generation_checkpoint for incremental AI generation
-- [ ] Implement @generating marker for in-progress generation
-- [ ] Create provenance database/storage format
-- [ ] Implement provenance querying API
+- [x] Define provenance metadata structures (human, AI, model, identity, etc.)
+- [x] Implement @author attribute parsing and storage
+- [x] Implement @confidence attribute parsing (0.0 - 1.0 scale)
+- [x] Implement @needs_review attribute with reason tracking
+- [x] Implement @approved attribute with by, at, and note fields
+- [x] Implement @verified attribute with status and obligations
+- [x] Implement @generation_checkpoint for incremental AI generation
+- [x] Implement @generating marker for in-progress generation
+- [x] Create provenance database/storage format
+- [x] Implement provenance querying API
 
 ## Phase 6: Trust Score System
 
