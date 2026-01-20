@@ -9,6 +9,7 @@
 //! - review: List items needing review
 //! - approve: Approve code for deployment
 //! - repl: Interactive mode for specifications
+//! - lsp: Start the Language Server Protocol server
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -26,6 +27,7 @@ pub const commands = struct {
     pub const review = @import("commands/review.zig");
     pub const approve = @import("commands/approve.zig");
     pub const repl = @import("commands/repl.zig");
+    pub const lsp = @import("commands/lsp.zig");
 };
 
 /// CLI application state
@@ -115,6 +117,8 @@ pub const Cli = struct {
             return commands.approve.run(self, args);
         } else if (std.mem.eql(u8, command, "repl")) {
             return commands.repl.run(self, args);
+        } else if (std.mem.eql(u8, command, "lsp")) {
+            return commands.lsp.run(self, args);
         } else if (std.mem.eql(u8, command, "help")) {
             self.output.printHelp();
             return 0;
@@ -138,4 +142,5 @@ test {
     _ = commands.review;
     _ = commands.approve;
     _ = commands.repl;
+    _ = commands.lsp;
 }

@@ -15,6 +15,7 @@ pub const trust = @import("trust/root.zig");
 pub const codegen = @import("codegen/root.zig");
 pub const cli = @import("cli/root.zig");
 pub const stdlib = @import("stdlib/root.zig");
+pub const lsp = @import("lsp/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -78,6 +79,10 @@ pub const CheckpointManager = codegen.CheckpointManager;
 // Re-export commonly used types from standard library
 pub const StandardLibrary = stdlib.StandardLibrary;
 
+// Re-export commonly used types from LSP
+pub const LspServer = lsp.Server;
+pub const LspProtocol = lsp.Protocol;
+
 test {
     _ = lexer;
     _ = parser;
@@ -89,4 +94,5 @@ test {
     _ = codegen;
     _ = cli;
     _ = stdlib;
+    _ = lsp;
 }

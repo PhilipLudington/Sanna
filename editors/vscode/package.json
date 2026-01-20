@@ -1,0 +1,98 @@
+{
+  "name": "sanna",
+  "displayName": "Sanna",
+  "description": "Language support for Sanna specification language",
+  "version": "0.1.0",
+  "publisher": "sanna",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "sanna",
+    "specification",
+    "formal methods",
+    "verification"
+  ],
+  "activationEvents": [
+    "onLanguage:sanna"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "sanna",
+        "aliases": [
+          "Sanna",
+          "sanna"
+        ],
+        "extensions": [
+          ".sanna"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sanna",
+        "scopeName": "source.sanna",
+        "path": "./syntaxes/sanna.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Sanna",
+      "properties": {
+        "sanna.serverPath": {
+          "type": "string",
+          "default": "sanna",
+          "description": "Path to the Sanna language server executable"
+        },
+        "sanna.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication with the Sanna language server"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "sanna.verify",
+        "title": "Sanna: Verify Specification"
+      },
+      {
+        "command": "sanna.approve",
+        "title": "Sanna: Approve Specification"
+      },
+      {
+        "command": "sanna.review",
+        "title": "Sanna: Request Review"
+      },
+      {
+        "command": "sanna.trust",
+        "title": "Sanna: Calculate Trust Score"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}

@@ -153,16 +153,16 @@ Built-in specifications for common patterns.
 
 Language Server Protocol support for IDE features.
 
-- [ ] Implement LSP server scaffold
-- [ ] Implement textDocument/didOpen and didChange handlers
-- [ ] Implement textDocument/diagnostic for syntax and type errors
-- [ ] Implement textDocument/hover for trust scores and verification status
-- [ ] Implement textDocument/completion for keywords and identifiers
-- [ ] Implement textDocument/definition for go-to-definition
-- [ ] Implement custom commands for approve/review actions
-- [ ] Implement progress notifications for verification
-- [ ] Create VS Code extension package
-- [ ] Create Neovim plugin configuration
+- [x] Implement LSP server scaffold
+- [x] Implement textDocument/didOpen and didChange handlers
+- [x] Implement textDocument/diagnostic for syntax and type errors
+- [x] Implement textDocument/hover for trust scores and verification status
+- [x] Implement textDocument/completion for keywords and identifiers
+- [x] Implement textDocument/definition for go-to-definition
+- [x] Implement custom commands for approve/review actions
+- [x] Implement progress notifications for verification
+- [x] Create VS Code extension package
+- [x] Create Neovim plugin configuration
 
 ## Phase 11: CI/CD Integration
 
