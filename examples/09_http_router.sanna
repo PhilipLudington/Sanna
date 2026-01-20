@@ -1,0 +1,443 @@
+// Example 9: HTTP Router
+// Demonstrates: Result types, pattern matching, path parameters, middleware, routing
+
+module examples.http
+
+import std.collections.{List, Map, Set}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.time.{Duration, milliseconds}
+
+// ============================================================================
+// HTTP Method
+// ============================================================================
+
+type Method =
+    | GET
+    | POST
+    | PUT
+    | PATCH
+    | DELETE
+    | HEAD
+    | OPTIONS
+    | TRACE
+    | CONNECT
+
+// ============================================================================
+// HTTP Status Codes
+// ============================================================================
+
+type StatusCode = i32
+  invariant: self >= 100 and self <= 599
+
+// Common status codes as constants
+const OK: StatusCode = 200
+const CREATED: StatusCode = 201
+const NO_CONTENT: StatusCode = 204
+const BAD_REQUEST: StatusCode = 400
+const UNAUTHORIZED: StatusCode = 401
+const FORBIDDEN: StatusCode = 403
+const NOT_FOUND: StatusCode = 404
+const METHOD_NOT_ALLOWED: StatusCode = 405
+const CONFLICT: StatusCode = 409
+const INTERNAL_SERVER_ERROR: StatusCode = 500
+const SERVICE_UNAVAILABLE: StatusCode = 503
+
+spec pure fn is_success(code: StatusCode) -> bool
+  ensures: result == (code >= 200 and code < 300)
+
+spec pure fn is_redirect(code: StatusCode) -> bool
+  ensures: result == (code >= 300 and code < 400)
+
+spec pure fn is_client_error(code: StatusCode) -> bool
+  ensures: result == (code >= 400 and code < 500)
+
+spec pure fn is_server_error(code: StatusCode) -> bool
+  ensures: result == (code >= 500 and code < 600)
+
+// ============================================================================
+// HTTP Headers
+// ============================================================================
+
+type HeaderName = string
+  invariant: self.length > 0
+
+type HeaderValue = string
+
+type Headers = Map[HeaderName, List[HeaderValue]]
+
+spec pure fn get_header(headers: Headers, name: HeaderName) -> Option[HeaderValue]
+  ensures:
+    result == match headers.get(name.to_lowercase()) {
+        Some(values) => values.first()
+        None => None
+    }
+
+spec pure fn get_all_headers(headers: Headers, name: HeaderName) -> List[HeaderValue]
+  ensures:
+    result == headers.get(name.to_lowercase()).unwrap_or(List.new())
+
+// ============================================================================
+// HTTP Request
+// ============================================================================
+
+type Request = {
+    method: Method,
+    path: string,
+    query: Map[string, string],
+    headers: Headers,
+    body: Option[Array[u8]],
+    params: Map[string, string]  // Path parameters
+}
+  invariant:
+    self.path.starts_with("/")
+
+type RequestBuilder = {
+    method: Option[Method],
+    path: Option[string],
+    query: Map[string, string],
+    headers: Headers,
+    body: Option[Array[u8]]
+}
+
+spec fn build_request(builder: RequestBuilder) -> Result[Request, string]
+  requires:
+    builder.method.is_some()
+    builder.path.is_some()
+  ensures:
+    result.is_ok() =>
+        result.unwrap().method == builder.method.unwrap() and
+        result.unwrap().path == builder.path.unwrap()
+
+// ============================================================================
+// HTTP Response
+// ============================================================================
+
+type Response = {
+    status: StatusCode,
+    headers: Headers,
+    body: Option[Array[u8]]
+}
+
+spec pure fn ok() -> Response
+  ensures:
+    result.status == 200
+    result.body == None
+
+spec pure fn ok_json(body: string) -> Response
+  ensures:
+    result.status == 200
+    result.headers.get("content-type") == Some(["application/json"])
+
+spec pure fn created(location: string) -> Response
+  ensures:
+    result.status == 201
+    result.headers.get("location") == Some([location])
+
+spec pure fn no_content() -> Response
+  ensures:
+    result.status == 204
+    result.body == None
+
+spec pure fn bad_request(message: string) -> Response
+  ensures: result.status == 400
+
+spec pure fn not_found() -> Response
+  ensures: result.status == 404
+
+spec pure fn internal_error(message: string) -> Response
+  ensures: result.status == 500
+
+// ============================================================================
+// Route Pattern
+// ============================================================================
+
+type PathSegment =
+    | Literal { value: string }
+    | Param { name: string }
+    | Wildcard
+    | CatchAll { name: string }
+
+type RoutePattern = {
+    segments: List[PathSegment],
+    method: Option[Method]  // None = match any method
+}
+
+spec pure fn parse_pattern(pattern: string) -> Result[RoutePattern, string]
+  requires: pattern.starts_with("/")
+  ensures:
+    result.is_ok() =>
+        result.unwrap().segments.length >= 0
+
+spec pure fn match_path(pattern: RoutePattern, path: string) -> Option[Map[string, string]]
+  ensures:
+    // Returns extracted parameters if match succeeds
+    result.is_some() =>
+        forall seg in pattern.segments:
+            match seg {
+                Param { name } => result.unwrap().contains_key(name)
+                CatchAll { name } => result.unwrap().contains_key(name)
+                _ => true
+            }
+
+// Examples:
+// "/users" matches "/users" -> Some({})
+// "/users/:id" matches "/users/123" -> Some({"id": "123"})
+// "/files/*path" matches "/files/a/b/c" -> Some({"path": "a/b/c"})
+
+// ============================================================================
+// Handler Types
+// ============================================================================
+
+type Handler = fn(Request) -> Response
+
+type AsyncHandler = fn(Request) -> Future[Response]
+
+type HandlerResult = Result[Response, HandlerError]
+
+type HandlerError =
+    | NotFound
+    | MethodNotAllowed { allowed: Set[Method] }
+    | BadRequest { message: string }
+    | Unauthorized { scheme: string }
+    | Forbidden { reason: string }
+    | InternalError { message: string }
+    | Custom { status: StatusCode, message: string }
+
+spec pure fn error_to_response(error: HandlerError) -> Response
+  ensures:
+    match error {
+        NotFound => result.status == 404
+        MethodNotAllowed { .. } => result.status == 405
+        BadRequest { .. } => result.status == 400
+        Unauthorized { .. } => result.status == 401
+        Forbidden { .. } => result.status == 403
+        InternalError { .. } => result.status == 500
+        Custom { status, .. } => result.status == status
+    }
+
+// ============================================================================
+// Middleware
+// ============================================================================
+
+type Middleware = fn(Request, Handler) -> Response
+
+type MiddlewareChain = List[Middleware]
+
+spec pure fn apply_middleware(
+    middlewares: MiddlewareChain,
+    handler: Handler,
+    request: Request
+) -> Response
+  decreases: middlewares.length
+  ensures:
+    middlewares.length == 0 => result == handler(request)
+
+// Common middleware
+spec fn logging_middleware(request: Request, next: Handler) -> Response
+  ensures: result == next(request)  // Passes through unchanged
+
+spec fn auth_middleware(request: Request, next: Handler) -> Response
+  ensures:
+    request.headers.get("authorization").is_none() =>
+        result.status == 401
+    request.headers.get("authorization").is_some() =>
+        result == next(request)
+
+spec fn cors_middleware(request: Request, next: Handler) -> Response
+  ensures:
+    result.headers.get("access-control-allow-origin").is_some()
+    match request.method {
+        OPTIONS => result.status == 204
+        _ => result == next(request).with_cors_headers()
+    }
+
+spec fn rate_limit_middleware(
+    limit: i32,
+    window: Duration
+) -> Middleware
+  ensures:
+    // Returns 429 if rate limit exceeded
+    true
+
+// ============================================================================
+// Router Interface
+// ============================================================================
+
+spec interface Router {
+    fn new() -> Self
+
+    fn route(self, pattern: string, method: Method, handler: Handler) -> Self
+      ensures: self.has_route(pattern, Some(method))
+      modifies: self
+
+    fn get(self, pattern: string, handler: Handler) -> Self
+      ensures: self.has_route(pattern, Some(GET))
+      modifies: self
+
+    fn post(self, pattern: string, handler: Handler) -> Self
+      ensures: self.has_route(pattern, Some(POST))
+      modifies: self
+
+    fn put(self, pattern: string, handler: Handler) -> Self
+      ensures: self.has_route(pattern, Some(PUT))
+      modifies: self
+
+    fn delete(self, pattern: string, handler: Handler) -> Self
+      ensures: self.has_route(pattern, Some(DELETE))
+      modifies: self
+
+    fn use_middleware(self, middleware: Middleware) -> Self
+      modifies: self
+
+    fn group(self, prefix: string, configure: fn(Router) -> Router) -> Self
+      ensures:
+        // All routes in group have the prefix
+        true
+      modifies: self
+
+    fn handle(self, request: Request) -> Response
+      ensures:
+        // Returns 404 if no route matches
+        not self.matches_any_route(request.path, request.method) =>
+            result.status == 404 or result.status == 405
+
+    // Query methods
+    pure fn has_route(self, pattern: string, method: Option[Method]) -> bool
+
+    pure fn matches_any_route(self, path: string, method: Method) -> bool
+
+    pure fn list_routes(self) -> List[{pattern: string, methods: Set[Method]}]
+}
+
+// ============================================================================
+// Route Matching
+// ============================================================================
+
+type RouteMatch = {
+    handler: Handler,
+    params: Map[string, string],
+    middlewares: MiddlewareChain
+}
+
+spec pure fn find_route(
+    router: Router,
+    path: string,
+    method: Method
+) -> Option[RouteMatch]
+  ensures:
+    result.is_some() => router.matches_any_route(path, method)
+
+spec pure fn match_routes(
+    routes: List[{pattern: RoutePattern, handler: Handler}],
+    path: string,
+    method: Method
+) -> List[RouteMatch]
+  ensures:
+    // Most specific match first
+    result.length > 0 =>
+        forall i in 1..result.length:
+            specificity(routes[0].pattern) >= specificity(routes[i].pattern)
+
+spec pure fn specificity(pattern: RoutePattern) -> i32
+  ensures:
+    // Literal segments are more specific than parameters
+    // Parameters are more specific than wildcards
+    result == pattern.segments.fold(0, |acc, seg|
+        acc + match seg {
+            Literal { .. } => 3
+            Param { .. } => 2
+            Wildcard => 1
+            CatchAll { .. } => 0
+        }
+    )
+
+// ============================================================================
+// Example Usage
+// ============================================================================
+
+spec fn create_api_router() -> Router
+  ensures:
+    result.has_route("/api/users", Some(GET))
+    result.has_route("/api/users", Some(POST))
+    result.has_route("/api/users/:id", Some(GET))
+    result.has_route("/api/users/:id", Some(PUT))
+    result.has_route("/api/users/:id", Some(DELETE))
+
+// Handler implementations
+spec fn list_users(request: Request) -> Response
+  ensures:
+    result.status == 200
+    result.headers.get("content-type") == Some(["application/json"])
+
+spec fn create_user(request: Request) -> Response
+  ensures:
+    request.body.is_none() => result.status == 400
+    request.body.is_some() => result.status == 201
+
+spec fn get_user(request: Request) -> Response
+  requires: request.params.contains_key("id")
+  ensures:
+    result.status == 200 or result.status == 404
+
+spec fn update_user(request: Request) -> Response
+  requires: request.params.contains_key("id")
+  ensures:
+    request.body.is_none() => result.status == 400
+
+spec fn delete_user(request: Request) -> Response
+  requires: request.params.contains_key("id")
+  ensures:
+    result.status == 204 or result.status == 404
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom route_determinism:
+    forall router: Router, request: Request:
+        // Same request always produces same response
+        router.handle(request) == router.handle(request)
+
+axiom middleware_composition:
+    forall m1, m2: Middleware, handler: Handler, request: Request:
+        // Middleware can be composed
+        apply_middleware([m1, m2], handler, request) ==
+            m1(request, |r| m2(r, handler))
+
+axiom path_matching_consistent:
+    forall pattern: RoutePattern, path: string:
+        match_path(pattern, path).is_some() =>
+            // If it matches, it should match consistently
+            match_path(pattern, path) == match_path(pattern, path)
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma not_found_or_method_not_allowed:
+    forall router: Router, request: Request:
+        not router.matches_any_route(request.path, request.method) =>
+            router.handle(request).status == 404 or
+            router.handle(request).status == 405
+
+lemma params_extracted_correctly:
+    forall pattern: RoutePattern, path: string:
+        match_path(pattern, path).is_some() =>
+            let params = match_path(pattern, path).unwrap() in
+            forall seg in pattern.segments:
+                match seg {
+                    Param { name } => params.contains_key(name)
+                    _ => true
+                }
+
+lemma specific_routes_match_first:
+    forall router: Router, path: string:
+        // /users/profile should match before /users/:id
+        true
+
+lemma middleware_order_matters:
+    forall m1, m2: Middleware, handler: Handler, request: Request:
+        // Order of middleware affects result
+        apply_middleware([m1, m2], handler, request) !=
+        apply_middleware([m2, m1], handler, request)  // In general

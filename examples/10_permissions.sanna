@@ -1,0 +1,501 @@
+// Example 10: Role-Based Access Control (RBAC) Permissions System
+// Demonstrates: Sets, intersection/union, hierarchical structures, axioms, security invariants
+
+module examples.permissions
+
+import std.collections.{Set, Map, List}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.time.{DateTime, now}
+
+// ============================================================================
+// Core Identity Types
+// ============================================================================
+
+type UserId = string
+  invariant: self.length > 0
+
+type RoleId = string
+  invariant: self.length > 0
+
+type ResourceId = string
+  invariant: self.length > 0
+
+type PermissionId = string
+  invariant: self.length > 0
+
+// ============================================================================
+// Permission Definition
+// ============================================================================
+
+type Permission = {
+    id: PermissionId,
+    name: string,
+    description: string,
+    resource_type: ResourceType,
+    action: Action
+}
+
+type ResourceType =
+    | Document
+    | User
+    | Project
+    | Organization
+    | API
+    | Database
+    | File
+    | Custom { name: string }
+
+type Action =
+    | Create
+    | Read
+    | Update
+    | Delete
+    | Execute
+    | Manage      // Full control
+    | Share       // Can share with others
+    | Export
+    | Import
+    | Approve
+    | Custom { name: string }
+
+// ============================================================================
+// Role Definition
+// ============================================================================
+
+type Role = {
+    id: RoleId,
+    name: string,
+    description: string,
+    permissions: Set[PermissionId],
+    parent_roles: Set[RoleId],     // For role hierarchy
+    is_system_role: bool           // Cannot be deleted
+}
+  invariant:
+    self.name.length > 0
+    not self.parent_roles.contains(self.id)  // No self-reference
+
+// Common roles
+const ADMIN: RoleId = "admin"
+const MODERATOR: RoleId = "moderator"
+const EDITOR: RoleId = "editor"
+const VIEWER: RoleId = "viewer"
+const GUEST: RoleId = "guest"
+
+// ============================================================================
+// Resource and Scope
+// ============================================================================
+
+type Resource = {
+    id: ResourceId,
+    resource_type: ResourceType,
+    owner: UserId,
+    parent: Option[ResourceId]     // For hierarchical resources
+}
+
+type Scope =
+    | Global                        // Permission applies everywhere
+    | Organization { org_id: string }
+    | Project { project_id: string }
+    | Resource { resource_id: ResourceId }
+    | User { user_id: UserId }      // User's own resources
+
+// ============================================================================
+// Role Assignment
+// ============================================================================
+
+type RoleAssignment = {
+    user_id: UserId,
+    role_id: RoleId,
+    scope: Scope,
+    granted_at: DateTime,
+    granted_by: UserId,
+    expires_at: Option[DateTime],
+    conditions: List[Condition]
+}
+  invariant:
+    match self.expires_at {
+        Some(exp) => exp.after(self.granted_at)
+        None => true
+    }
+
+type Condition =
+    | TimeRange { start: DateTime, end: DateTime }
+    | IPRange { cidrs: List[string] }
+    | MFARequired
+    | ApprovalRequired { approver_role: RoleId }
+    | Custom { name: string, expression: string }
+
+// ============================================================================
+// Permission Check Result
+// ============================================================================
+
+type AccessDecision =
+    | Allow { reason: string, via_role: RoleId }
+    | Deny { reason: string }
+    | RequiresElevation { requirements: List[Condition] }
+
+type PermissionCheckResult = {
+    decision: AccessDecision,
+    checked_at: DateTime,
+    resource: ResourceId,
+    action: Action,
+    effective_permissions: Set[PermissionId]
+}
+
+// ============================================================================
+// RBAC Service Interface
+// ============================================================================
+
+spec interface RBACService {
+    // Role management
+    fn create_role(self, role: Role) -> Result[RoleId, RBACError]
+      requires:
+        not self.role_exists(role.id)
+        forall parent in role.parent_roles: self.role_exists(parent)
+        not creates_cycle(self, role)  // No circular inheritance
+      ensures:
+        result.is_ok() => self.role_exists(role.id)
+      modifies: self
+
+    fn delete_role(self, role_id: RoleId) -> Result[(), RBACError]
+      requires:
+        self.role_exists(role_id)
+        not self.get_role(role_id).unwrap().is_system_role
+      ensures:
+        result.is_ok() => not self.role_exists(role_id)
+      modifies: self
+
+    fn add_permission_to_role(
+        self,
+        role_id: RoleId,
+        permission_id: PermissionId
+    ) -> Result[(), RBACError]
+      requires: self.role_exists(role_id)
+      ensures:
+        result.is_ok() =>
+            self.get_role(role_id).unwrap().permissions.contains(permission_id)
+      modifies: self
+
+    fn remove_permission_from_role(
+        self,
+        role_id: RoleId,
+        permission_id: PermissionId
+    ) -> Result[(), RBACError]
+      requires: self.role_exists(role_id)
+      ensures:
+        result.is_ok() =>
+            not self.get_role(role_id).unwrap().permissions.contains(permission_id)
+      modifies: self
+
+    // Role assignment
+    fn assign_role(
+        self,
+        user_id: UserId,
+        role_id: RoleId,
+        scope: Scope,
+        granted_by: UserId
+    ) -> Result[RoleAssignment, RBACError]
+      requires:
+        self.role_exists(role_id)
+        self.can_grant(granted_by, role_id, scope)  // Granter must have permission
+      ensures:
+        result.is_ok() =>
+            self.user_has_role(user_id, role_id, scope)
+      modifies: self
+
+    fn revoke_role(
+        self,
+        user_id: UserId,
+        role_id: RoleId,
+        scope: Scope
+    ) -> Result[(), RBACError]
+      ensures:
+        result.is_ok() =>
+            not self.user_has_role(user_id, role_id, scope)
+      modifies: self
+
+    // Permission checking
+    fn check_permission(
+        self,
+        user_id: UserId,
+        resource: ResourceId,
+        action: Action
+    ) -> PermissionCheckResult
+      ensures:
+        // Decision is based on effective permissions
+        self.effective_permissions(user_id, resource).is_empty() =>
+            match result.decision { Deny { .. } => true, _ => false }
+
+    fn has_permission(
+        self,
+        user_id: UserId,
+        permission_id: PermissionId,
+        scope: Scope
+    ) -> bool
+      ensures:
+        result == self.effective_permissions_for_scope(user_id, scope).contains(permission_id)
+
+    fn can_access(
+        self,
+        user_id: UserId,
+        resource: ResourceId,
+        action: Action
+    ) -> bool
+      ensures:
+        result == match self.check_permission(user_id, resource, action).decision {
+            Allow { .. } => true
+            _ => false
+        }
+
+    // Query methods
+    pure fn role_exists(self, role_id: RoleId) -> bool
+
+    pure fn get_role(self, role_id: RoleId) -> Option[Role]
+      ensures: self.role_exists(role_id) <=> result.is_some()
+
+    pure fn user_has_role(self, user_id: UserId, role_id: RoleId, scope: Scope) -> bool
+
+    pure fn user_roles(self, user_id: UserId) -> List[RoleAssignment]
+      ensures:
+        forall assignment in result: assignment.user_id == user_id
+
+    pure fn effective_permissions(self, user_id: UserId, resource: ResourceId) -> Set[PermissionId]
+      ensures:
+        // Includes permissions from all assigned roles (with inheritance)
+        forall p in result:
+            exists role in self.user_roles(user_id):
+                self.role_includes_permission(role.role_id, p)
+
+    pure fn effective_permissions_for_scope(self, user_id: UserId, scope: Scope) -> Set[PermissionId]
+
+    pure fn role_includes_permission(self, role_id: RoleId, permission_id: PermissionId) -> bool
+      ensures:
+        // Direct or inherited
+        result ==
+            self.get_role(role_id).unwrap().permissions.contains(permission_id) or
+            exists parent in self.get_role(role_id).unwrap().parent_roles:
+                self.role_includes_permission(parent, permission_id)
+
+    pure fn can_grant(self, granter: UserId, role_id: RoleId, scope: Scope) -> bool
+      ensures:
+        // Can only grant roles you have + Manage permission
+        result =>
+            self.user_has_role(granter, role_id, scope) or
+            self.has_permission(granter, "manage_roles", scope)
+
+    // Invariants
+    invariant: not self.has_cycle_in_role_hierarchy()
+
+    invariant: forall role in self.all_roles():
+        not role.parent_roles.contains(role.id)
+}
+
+type RBACError =
+    | RoleNotFound
+    | RoleAlreadyExists
+    | PermissionNotFound
+    | CyclicRoleHierarchy
+    | InsufficientPrivileges
+    | SystemRoleCannotBeModified
+    | AssignmentNotFound
+    | InvalidScope
+
+// ============================================================================
+// Role Hierarchy
+// ============================================================================
+
+spec pure fn creates_cycle(service: RBACService, new_role: Role) -> bool
+  ensures:
+    // Check if adding this role would create a cycle
+    result == exists parent in new_role.parent_roles:
+        role_reaches(service, parent, new_role.id)
+  decreases: service.all_roles().length
+
+spec pure fn role_reaches(service: RBACService, from: RoleId, to: RoleId) -> bool
+  ensures:
+    from == to => result == true
+    from != to => result == exists parent in service.get_role(from).unwrap().parent_roles:
+        role_reaches(service, parent, to)
+  decreases: service.role_depth(from)
+
+spec pure fn inherited_permissions(service: RBACService, role_id: RoleId) -> Set[PermissionId]
+  requires: service.role_exists(role_id)
+  ensures:
+    // All permissions from this role and ancestors
+    result == service.get_role(role_id).unwrap().permissions.union(
+        service.get_role(role_id).unwrap().parent_roles.fold(
+            Set.new(),
+            |acc, parent| acc.union(inherited_permissions(service, parent))
+        )
+    )
+  decreases: service.role_depth(role_id)
+
+// ============================================================================
+// Attribute-Based Access Control (ABAC) Extension
+// ============================================================================
+
+type Attribute =
+    | UserAttribute { name: string, value: string }
+    | ResourceAttribute { name: string, value: string }
+    | EnvironmentAttribute { name: string, value: string }
+
+type Policy = {
+    id: string,
+    name: string,
+    effect: PolicyEffect,
+    subjects: Set[SubjectMatcher],
+    resources: Set[ResourceMatcher],
+    actions: Set[Action],
+    conditions: List[PolicyCondition]
+}
+
+type PolicyEffect =
+    | Permit
+    | Deny
+
+type SubjectMatcher =
+    | AnyUser
+    | UserId { id: UserId }
+    | Role { role_id: RoleId }
+    | Attribute { name: string, value: string }
+
+type ResourceMatcher =
+    | AnyResource
+    | ResourceId { id: ResourceId }
+    | ResourceType { type_: ResourceType }
+    | Attribute { name: string, value: string }
+
+type PolicyCondition =
+    | AttributeEquals { attribute: Attribute, value: string }
+    | AttributeIn { attribute: Attribute, values: Set[string] }
+    | TimeConstraint { start: DateTime, end: DateTime }
+    | Expression { expr: string }  // Custom expression
+
+spec pure fn evaluate_policy(
+    policy: Policy,
+    user: UserId,
+    user_attrs: Map[string, string],
+    resource: ResourceId,
+    resource_attrs: Map[string, string],
+    action: Action
+) -> Option[PolicyEffect]
+  ensures:
+    // Policy only applies if all matchers match
+    not matches_subject(policy.subjects, user, user_attrs) => result == None
+    not matches_resource(policy.resources, resource, resource_attrs) => result == None
+    not policy.actions.contains(action) => result == None
+    not all_conditions_satisfied(policy.conditions, user_attrs, resource_attrs) => result == None
+    // Otherwise, return the effect
+    true => result == Some(policy.effect)
+
+// ============================================================================
+// Audit Logging
+// ============================================================================
+
+type AuditEvent = {
+    id: string,
+    timestamp: DateTime,
+    user_id: UserId,
+    action: AuditAction,
+    resource: Option[ResourceId],
+    decision: AccessDecision,
+    ip_address: Option[string],
+    user_agent: Option[string]
+}
+
+type AuditAction =
+    | PermissionCheck { permission: PermissionId }
+    | RoleAssigned { role_id: RoleId, scope: Scope }
+    | RoleRevoked { role_id: RoleId, scope: Scope }
+    | RoleCreated { role_id: RoleId }
+    | RoleDeleted { role_id: RoleId }
+    | PermissionGranted { role_id: RoleId, permission_id: PermissionId }
+    | PermissionRevoked { role_id: RoleId, permission_id: PermissionId }
+
+// ============================================================================
+// Security Invariants
+// ============================================================================
+
+invariant least_privilege:
+    // Users should only have permissions they need
+    forall user: UserId, service: RBACService:
+        service.effective_permissions(user, any_resource).size <=
+            max_permissions_per_user()
+
+invariant no_privilege_escalation:
+    // Users cannot grant permissions they don't have
+    forall granter, grantee: UserId, role: RoleId, scope: Scope, service: RBACService:
+        service.assign_role(grantee, role, scope, granter).is_ok() =>
+            service.can_grant(granter, role, scope)
+
+invariant admin_protected:
+    // Admin role cannot be self-granted
+    forall user: UserId, service: RBACService:
+        not service.can_grant(user, ADMIN, Global) or
+        service.user_has_role(user, ADMIN, Global)
+
+invariant no_orphan_permissions:
+    // All permissions in roles must exist
+    forall role in service.all_roles(), perm in role.permissions:
+        service.permission_exists(perm)
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom permission_transitivity:
+    forall service: RBACService, user: UserId, role: RoleId:
+        service.user_has_role(user, role, Global) =>
+            forall child_scope: Scope:
+                service.effective_permissions_for_scope(user, child_scope).is_superset(
+                    service.effective_permissions_for_scope(user, Global)
+                )
+
+axiom role_hierarchy_inheritance:
+    forall service: RBACService, role: RoleId, parent: RoleId:
+        service.get_role(role).unwrap().parent_roles.contains(parent) =>
+            inherited_permissions(service, role).is_superset(
+                service.get_role(parent).unwrap().permissions
+            )
+
+axiom deny_overrides_permit:
+    forall policies: List[Policy], user: UserId, resource: ResourceId, action: Action:
+        // If any policy denies, access is denied
+        exists p in policies: evaluate_policy(p, user, attrs, resource, attrs, action) == Some(Deny) =>
+            final_decision(policies, user, resource, action) == Deny { reason: "Explicit deny" }
+
+axiom explicit_grant_required:
+    // No permission without explicit grant
+    forall service: RBACService, user: UserId, perm: PermissionId:
+        service.has_permission(user, perm, Global) =>
+            exists assignment in service.user_roles(user):
+                service.role_includes_permission(assignment.role_id, perm)
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma inherited_includes_direct:
+    forall service: RBACService, role_id: RoleId:
+        service.role_exists(role_id) =>
+            inherited_permissions(service, role_id).is_superset(
+                service.get_role(role_id).unwrap().permissions
+            )
+
+lemma child_scope_inherits_parent:
+    forall service: RBACService, user: UserId, org: string, project: string:
+        service.effective_permissions_for_scope(user, Organization { org_id: org }).is_superset(
+            service.effective_permissions_for_scope(user, Project { project_id: project })
+        )  // When project is in organization
+
+lemma revoke_removes_permission:
+    forall service: RBACService, user: UserId, role_id: RoleId, scope: Scope:
+        service.revoke_role(user, role_id, scope).is_ok() =>
+            not service.user_has_role(user, role_id, scope)
+
+lemma role_deletion_cascades:
+    forall service: RBACService, role_id: RoleId:
+        service.delete_role(role_id).is_ok() =>
+            forall user: UserId:
+                not service.user_has_role(user, role_id, Global)

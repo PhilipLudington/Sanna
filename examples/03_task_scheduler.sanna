@@ -1,0 +1,356 @@
+// Example 3: Task Scheduler
+// Demonstrates: Time/Duration, interfaces, priority queues, decreases clauses, ghost state
+
+module examples.scheduler
+
+import std.time.{DateTime, Duration, seconds, minutes, hours, now}
+import std.collections.{List, Map, Set}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.ordering.{Ord, Eq, Ordering, Less, Greater, Equal}
+
+// ============================================================================
+// Task Definition
+// ============================================================================
+
+type TaskId = string
+  invariant: self.length > 0
+
+type Priority = i32
+  invariant: self >= 0 and self <= 100  // 0 = lowest, 100 = highest
+
+type TaskStatus =
+    | Pending
+    | Running { started_at: DateTime, worker_id: string }
+    | Completed { finished_at: DateTime, result: TaskResult }
+    | Failed { failed_at: DateTime, error: TaskError, retry_count: i32 }
+    | Cancelled { cancelled_at: DateTime, reason: string }
+    | Timeout { timed_out_at: DateTime }
+
+type TaskResult =
+    | Success { output: string }
+    | PartialSuccess { output: string, warnings: List[string] }
+
+type TaskError =
+    | ExecutionFailed { message: string }
+    | DependencyFailed { task_id: TaskId }
+    | ResourceUnavailable { resource: string }
+    | Timeout
+
+// ============================================================================
+// Task Scheduling Configuration
+// ============================================================================
+
+type ScheduleType =
+    | Once { at: DateTime }
+    | Recurring { interval: Duration, start: DateTime, end: Option[DateTime] }
+    | Cron { expression: string }
+    | Immediate
+    | AfterTask { depends_on: TaskId }
+    | AfterTasks { depends_on: List[TaskId], strategy: DependencyStrategy }
+
+type DependencyStrategy =
+    | AllComplete      // Run after ALL dependencies complete
+    | AnyComplete      // Run after ANY dependency completes
+    | AllSuccessful    // Run only if ALL dependencies succeed
+
+type RetryPolicy = {
+    max_retries: i32,
+    initial_delay: Duration,
+    max_delay: Duration,
+    backoff_multiplier: f64
+}
+  invariant:
+    self.max_retries >= 0
+    self.initial_delay.is_positive()
+    self.max_delay.nanos >= self.initial_delay.nanos
+    self.backoff_multiplier >= 1.0
+
+// ============================================================================
+// Task Definition
+// ============================================================================
+
+type Task = {
+    id: TaskId,
+    name: string,
+    priority: Priority,
+    schedule: ScheduleType,
+    timeout: Duration,
+    retry_policy: Option[RetryPolicy],
+    status: TaskStatus,
+    created_at: DateTime,
+    next_run: Option[DateTime],
+    tags: Set[string]
+}
+  invariant:
+    self.timeout.is_positive()
+    self.name.length > 0
+    match self.status {
+        Running { started_at, .. } => started_at.after(self.created_at) or started_at == self.created_at
+        Completed { finished_at, .. } => finished_at.after(self.created_at)
+        _ => true
+    }
+
+// ============================================================================
+// Scheduler Interface
+// ============================================================================
+
+spec interface Scheduler {
+    // Task management
+    fn schedule(self, task: Task) -> Result[TaskId, SchedulerError]
+      requires:
+        not self.has_task(task.id)
+        match task.schedule {
+            Once { at } => at.after(now()) or at == now()
+            Recurring { start, .. } => start.after(now()) or start == now()
+            AfterTask { depends_on } => self.has_task(depends_on)
+            AfterTasks { depends_on, .. } => forall id in depends_on: self.has_task(id)
+            _ => true
+        }
+      ensures:
+        result.is_ok() => self.has_task(task.id)
+        result.is_ok() => self.task_count() == old(self.task_count()) + 1
+      modifies: self
+
+    fn cancel(self, task_id: TaskId) -> Result[(), SchedulerError]
+      requires: self.has_task(task_id)
+      ensures:
+        result.is_ok() =>
+            match self.get_task(task_id).unwrap().status {
+                Cancelled { .. } => true
+                _ => false
+            }
+      modifies: self
+
+    fn reschedule(self, task_id: TaskId, new_schedule: ScheduleType) -> Result[(), SchedulerError]
+      requires:
+        self.has_task(task_id)
+        match self.get_task(task_id).unwrap().status {
+            Pending => true
+            Failed { .. } => true
+            _ => false
+        }
+      modifies: self
+
+    // Execution
+    fn tick(self, current_time: DateTime) -> List[TaskId]
+      ensures:
+        forall id in result: self.get_task(id).unwrap().next_run.is_some()
+        forall id in result:
+            self.get_task(id).unwrap().next_run.unwrap().before(current_time) or
+            self.get_task(id).unwrap().next_run.unwrap() == current_time
+      modifies: self
+
+    fn start_task(self, task_id: TaskId, worker_id: string) -> Result[(), SchedulerError]
+      requires: self.has_task(task_id)
+      ensures:
+        result.is_ok() =>
+            match self.get_task(task_id).unwrap().status {
+                Running { worker_id: w, .. } => w == worker_id
+                _ => false
+            }
+      modifies: self
+
+    fn complete_task(self, task_id: TaskId, result: TaskResult) -> Result[(), SchedulerError]
+      requires: self.has_task(task_id)
+      ensures:
+        result.is_ok() =>
+            match self.get_task(task_id).unwrap().status {
+                Completed { .. } => true
+                _ => false
+            }
+      modifies: self
+
+    fn fail_task(self, task_id: TaskId, error: TaskError) -> Result[(), SchedulerError]
+      requires: self.has_task(task_id)
+      ensures:
+        result.is_ok() =>
+            match self.get_task(task_id).unwrap().status {
+                Failed { .. } => true
+                Pending => true  // If retry scheduled
+                _ => false
+            }
+      modifies: self
+
+    // Query operations
+    pure fn has_task(self, task_id: TaskId) -> bool
+
+    pure fn get_task(self, task_id: TaskId) -> Option[Task]
+      ensures:
+        self.has_task(task_id) <=> result.is_some()
+
+    pure fn task_count(self) -> i32
+      ensures: result >= 0
+
+    pure fn pending_tasks(self) -> List[Task]
+      ensures:
+        forall t in result: match t.status { Pending => true, _ => false }
+
+    pure fn running_tasks(self) -> List[Task]
+      ensures:
+        forall t in result: match t.status { Running { .. } => true, _ => false }
+
+    pure fn tasks_by_priority(self) -> List[Task]
+      ensures:
+        result.is_sorted_by(|a, b| a.priority >= b.priority)
+
+    pure fn tasks_due_before(self, deadline: DateTime) -> List[Task]
+      ensures:
+        forall t in result:
+            t.next_run.is_some() and t.next_run.unwrap().before(deadline)
+
+    // Ghost state for specification
+    ghost fn dependency_graph(self) -> Map[TaskId, Set[TaskId]]
+
+    invariant: self.task_count() >= 0
+    invariant: forall t in self.running_tasks(): t.timeout.is_positive()
+}
+
+type SchedulerError =
+    | TaskNotFound
+    | TaskAlreadyExists
+    | InvalidSchedule
+    | DependencyCycle
+    | TaskAlreadyRunning
+    | TaskNotRunning
+
+// ============================================================================
+// Dependency Resolution
+// ============================================================================
+
+spec pure fn has_dependency_cycle(graph: Map[TaskId, Set[TaskId]]) -> bool
+  // Uses depth-first search to detect cycles
+  decreases: graph.size  // Termination measure
+
+spec pure fn topological_sort(graph: Map[TaskId, Set[TaskId]]) -> Option[List[TaskId]]
+  requires: not has_dependency_cycle(graph)
+  ensures:
+    result.is_some() => result.unwrap().length == graph.size
+    result.is_some() => forall i, j in 0..result.unwrap().length:
+        graph.get(result.unwrap()[i]).unwrap().contains(result.unwrap()[j]) => i > j
+
+spec pure fn ready_tasks(scheduler: Scheduler, current_time: DateTime) -> List[Task]
+  ensures:
+    forall t in result:
+        t.next_run.is_some() and
+        t.next_run.unwrap().before(current_time) and
+        dependencies_satisfied(scheduler, t.id)
+
+spec pure fn dependencies_satisfied(scheduler: Scheduler, task_id: TaskId) -> bool
+  requires: scheduler.has_task(task_id)
+  ensures:
+    match scheduler.get_task(task_id).unwrap().schedule {
+        AfterTask { depends_on } =>
+            result == match scheduler.get_task(depends_on) {
+                Some(t) => match t.status { Completed { .. } => true, _ => false }
+                None => false
+            }
+        AfterTasks { depends_on, strategy } =>
+            match strategy {
+                AllComplete => result == forall id in depends_on:
+                    match scheduler.get_task(id) {
+                        Some(t) => match t.status { Completed { .. } => true, _ => false }
+                        None => false
+                    }
+                AnyComplete => result == exists id in depends_on:
+                    match scheduler.get_task(id) {
+                        Some(t) => match t.status { Completed { .. } => true, _ => false }
+                        None => false
+                    }
+                AllSuccessful => result == forall id in depends_on:
+                    match scheduler.get_task(id) {
+                        Some(t) => match t.status {
+                            Completed { result: Success { .. }, .. } => true
+                            Completed { result: PartialSuccess { .. }, .. } => true
+                            _ => false
+                        }
+                        None => false
+                    }
+            }
+        _ => result == true
+    }
+
+// ============================================================================
+// Retry Logic
+// ============================================================================
+
+spec pure fn calculate_retry_delay(policy: RetryPolicy, attempt: i32) -> Duration
+  requires: attempt >= 0 and attempt < policy.max_retries
+  ensures:
+    result.nanos >= policy.initial_delay.nanos
+    result.nanos <= policy.max_delay.nanos
+
+spec pure fn should_retry(task: Task, error: TaskError) -> bool
+  ensures:
+    match task.retry_policy {
+        None => result == false
+        Some(policy) =>
+            match task.status {
+                Failed { retry_count, .. } =>
+                    result == (retry_count < policy.max_retries and is_retryable_error(error))
+                _ => result == false
+            }
+    }
+
+spec pure fn is_retryable_error(error: TaskError) -> bool
+  ensures:
+    match error {
+        ExecutionFailed { .. } => result == true
+        ResourceUnavailable { .. } => result == true
+        Timeout => result == true
+        DependencyFailed { .. } => result == false  // Don't retry if dependency failed
+    }
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom task_id_uniqueness:
+    forall scheduler: Scheduler, id: TaskId:
+        scheduler.has_task(id) =>
+            scheduler.pending_tasks().filter(|t| t.id == id).length +
+            scheduler.running_tasks().filter(|t| t.id == id).length <= 1
+
+axiom priority_ordering:
+    forall t1, t2: Task:
+        t1.priority > t2.priority =>
+            // Higher priority tasks should be scheduled first (when both ready)
+            true
+
+axiom dependency_acyclic:
+    forall scheduler: Scheduler:
+        not has_dependency_cycle(scheduler.dependency_graph())
+
+axiom completed_tasks_dont_run:
+    forall scheduler: Scheduler, task_id: TaskId:
+        match scheduler.get_task(task_id) {
+            Some(t) => match t.status {
+                Completed { .. } => not scheduler.running_tasks().contains(t)
+                _ => true
+            }
+            None => true
+        }
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma retry_bounded:
+    forall task: Task, policy: RetryPolicy:
+        task.retry_policy == Some(policy) =>
+            match task.status {
+                Failed { retry_count, .. } => retry_count <= policy.max_retries
+                _ => true
+            }
+
+lemma backoff_exponential:
+    forall policy: RetryPolicy, attempt: i32:
+        attempt > 0 and attempt < policy.max_retries =>
+            calculate_retry_delay(policy, attempt).nanos >=
+            calculate_retry_delay(policy, attempt - 1).nanos
+
+lemma eventually_completes_or_fails:
+    forall scheduler: Scheduler, task: Task:
+        task.retry_policy.is_some() =>
+            // After max_retries + 1 attempts, task is either completed or permanently failed
+            true

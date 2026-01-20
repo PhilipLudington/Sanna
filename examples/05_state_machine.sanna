@@ -1,0 +1,364 @@
+// Example 5: Generic State Machine
+// Demonstrates: Sum types, state transitions, guards, effects, pattern matching
+
+module examples.statemachine
+
+import std.collections.{List, Set, Map}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.time.{DateTime, now}
+
+// ============================================================================
+// Generic State Machine Types
+// ============================================================================
+
+type StateId = string
+  invariant: self.length > 0
+
+type EventId = string
+  invariant: self.length > 0
+
+type GuardId = string
+type ActionId = string
+
+// ============================================================================
+// State Definition
+// ============================================================================
+
+type State[Data] = {
+    id: StateId,
+    name: string,
+    data: Option[Data],
+    on_enter: List[ActionId],
+    on_exit: List[ActionId],
+    is_final: bool
+}
+
+type StateType =
+    | Simple
+    | Compound { initial: StateId, children: Set[StateId] }
+    | Parallel { regions: List[StateId] }
+    | History { deep: bool }
+
+// ============================================================================
+// Transition Definition
+// ============================================================================
+
+type Transition[Event, Data] = {
+    id: string,
+    source: StateId,
+    target: StateId,
+    event: Option[Event],          // None = automatic transition
+    guard: Option[Guard[Data]],    // Condition that must be true
+    actions: List[ActionId]        // Actions to execute on transition
+}
+
+type Guard[Data] =
+    | Predicate { check: fn(Data) -> bool }
+    | And { left: Guard[Data], right: Guard[Data] }
+    | Or { left: Guard[Data], right: Guard[Data] }
+    | Not { inner: Guard[Data] }
+    | Always
+    | Never
+
+// ============================================================================
+// Transition Result
+// ============================================================================
+
+type TransitionResult[Data] =
+    | Transitioned {
+        from: StateId,
+        to: StateId,
+        actions_executed: List[ActionId],
+        new_data: Data
+    }
+    | GuardBlocked { guard: string, reason: string }
+    | NoTransition { current_state: StateId }
+    | InvalidEvent { event: string, valid_events: List[string] }
+    | AlreadyInFinalState
+
+// ============================================================================
+// State Machine Definition
+// ============================================================================
+
+type StateMachineDefinition[Event, Data] = {
+    id: string,
+    initial_state: StateId,
+    states: Map[StateId, State[Data]],
+    transitions: List[Transition[Event, Data]],
+    context: Data
+}
+  invariant:
+    self.states.contains_key(self.initial_state)
+    forall t in self.transitions:
+        self.states.contains_key(t.source) and
+        self.states.contains_key(t.target)
+
+// ============================================================================
+// State Machine Instance
+// ============================================================================
+
+type StateMachine[Event, Data] = {
+    definition: StateMachineDefinition[Event, Data],
+    current_state: StateId,
+    history: List[StateTransition],
+    context: Data
+}
+  invariant:
+    self.definition.states.contains_key(self.current_state)
+
+type StateTransition = {
+    from: StateId,
+    to: StateId,
+    event: Option[string],
+    timestamp: DateTime
+}
+
+// ============================================================================
+// State Machine Interface
+// ============================================================================
+
+spec interface StateMachineRunner[Event, Data] {
+    fn create(definition: StateMachineDefinition[Event, Data]) -> Self
+      ensures:
+        result.current_state() == definition.initial_state
+        result.history().length == 0
+
+    fn send(self, event: Event) -> TransitionResult[Data]
+      ensures:
+        // If in final state, cannot transition
+        self.is_in_final_state() =>
+            match result { AlreadyInFinalState => true, _ => false }
+        // Transition history is updated on successful transition
+        match result {
+            Transitioned { from, to, .. } =>
+                self.current_state() == to and
+                self.history().length == old(self.history().length) + 1 and
+                self.history().last().unwrap().from == from and
+                self.history().last().unwrap().to == to
+            _ => self.current_state() == old(self.current_state())
+        }
+      modifies: self
+
+    fn can_transition(self, event: Event) -> bool
+      ensures:
+        result => exists t in self.available_transitions():
+            t.event == Some(event) and evaluate_guard(t.guard, self.context())
+
+    fn available_transitions(self) -> List[Transition[Event, Data]]
+      ensures:
+        forall t in result: t.source == self.current_state()
+
+    fn reset(self) -> ()
+      ensures:
+        self.current_state() == self.definition().initial_state
+        self.history().length == 0
+      modifies: self
+
+    // Query methods
+    pure fn current_state(self) -> StateId
+    pure fn context(self) -> Data
+    pure fn history(self) -> List[StateTransition]
+    pure fn definition(self) -> StateMachineDefinition[Event, Data]
+
+    pure fn is_in_final_state(self) -> bool
+      ensures:
+        result == self.definition().states.get(self.current_state()).unwrap().is_final
+
+    pure fn state_data(self, state_id: StateId) -> Option[Data]
+      requires: self.definition().states.contains_key(state_id)
+
+    invariant: self.definition().states.contains_key(self.current_state())
+}
+
+// ============================================================================
+// Guard Evaluation
+// ============================================================================
+
+spec pure fn evaluate_guard[Data](guard: Option[Guard[Data]], data: Data) -> bool
+  ensures:
+    match guard {
+        None => result == true
+        Some(g) => result == evaluate_guard_inner(g, data)
+    }
+
+spec pure fn evaluate_guard_inner[Data](guard: Guard[Data], data: Data) -> bool
+  ensures:
+    match guard {
+        Predicate { check } => result == check(data)
+        And { left, right } =>
+            result == (evaluate_guard_inner(left, data) and evaluate_guard_inner(right, data))
+        Or { left, right } =>
+            result == (evaluate_guard_inner(left, data) or evaluate_guard_inner(right, data))
+        Not { inner } => result == not evaluate_guard_inner(inner, data)
+        Always => result == true
+        Never => result == false
+    }
+
+// ============================================================================
+// Example: Document Workflow State Machine
+// ============================================================================
+
+type DocumentEvent =
+    | Create
+    | Submit
+    | Approve
+    | Reject { reason: string }
+    | RequestChanges { comments: string }
+    | Publish
+    | Archive
+    | Restore
+
+type DocumentState =
+    | Draft
+    | PendingReview
+    | Approved
+    | Rejected
+    | Published
+    | Archived
+
+type DocumentData = {
+    id: string,
+    title: string,
+    author: string,
+    reviewer: Option[string],
+    version: i32,
+    comments: List[string]
+}
+
+spec fn create_document_workflow() -> StateMachineDefinition[DocumentEvent, DocumentData]
+  ensures:
+    result.initial_state == "draft"
+    result.states.size == 6
+    // Draft can transition to PendingReview
+    exists t in result.transitions:
+        t.source == "draft" and t.target == "pending_review" and
+        match t.event { Some(Submit) => true, _ => false }
+    // PendingReview can transition to Approved, Rejected, or back to Draft
+    exists t in result.transitions:
+        t.source == "pending_review" and t.target == "approved"
+    exists t in result.transitions:
+        t.source == "pending_review" and t.target == "rejected"
+    // Only Approved documents can be Published
+    exists t in result.transitions:
+        t.source == "approved" and t.target == "published"
+    // Published is a final state only Archive transitions out
+    result.states.get("archived").unwrap().is_final == true
+
+// ============================================================================
+// Example: TCP Connection State Machine
+// ============================================================================
+
+type TCPEvent =
+    | PassiveOpen
+    | ActiveOpen
+    | SynReceived
+    | SynAckReceived
+    | AckReceived
+    | Close
+    | FinReceived
+    | Timeout
+    | Reset
+
+type TCPState =
+    | Closed
+    | Listen
+    | SynSent
+    | SynReceived
+    | Established
+    | FinWait1
+    | FinWait2
+    | CloseWait
+    | Closing
+    | LastAck
+    | TimeWait
+
+type TCPData = {
+    local_port: i32,
+    remote_port: Option[i32],
+    sequence_number: i64,
+    ack_number: i64,
+    window_size: i32
+}
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom deterministic_transitions:
+    forall sm: StateMachine[E, D], event: E:
+        // At most one transition should match for any event
+        sm.available_transitions()
+            .filter(|t| t.event == Some(event))
+            .filter(|t| evaluate_guard(t.guard, sm.context()))
+            .length <= 1
+
+axiom final_states_are_terminal:
+    forall sm: StateMachine[E, D]:
+        sm.is_in_final_state() =>
+            sm.available_transitions().length == 0
+
+axiom guard_evaluation_pure:
+    forall guard: Guard[D], data: D:
+        evaluate_guard_inner(guard, data) == evaluate_guard_inner(guard, data)
+
+axiom history_ordered:
+    forall sm: StateMachine[E, D]:
+        forall i in 0..sm.history().length - 1:
+            sm.history()[i].timestamp.before(sm.history()[i + 1].timestamp) or
+            sm.history()[i].timestamp == sm.history()[i + 1].timestamp
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma transition_preserves_validity:
+    forall sm: StateMachine[E, D], event: E:
+        match sm.send(event) {
+            Transitioned { to, .. } => sm.definition().states.contains_key(to)
+            _ => true
+        }
+
+lemma guard_composition:
+    forall g1, g2: Guard[D], data: D:
+        evaluate_guard_inner(And { left: g1, right: g2 }, data) ==
+            (evaluate_guard_inner(g1, data) and evaluate_guard_inner(g2, data))
+
+lemma de_morgan_guards:
+    forall g1, g2: Guard[D], data: D:
+        evaluate_guard_inner(Not { inner: Or { left: g1, right: g2 } }, data) ==
+            evaluate_guard_inner(And { left: Not { inner: g1 }, right: Not { inner: g2 } }, data)
+
+lemma history_length_increases:
+    forall sm: StateMachine[E, D], event: E:
+        match sm.send(event) {
+            Transitioned { .. } => sm.history().length == old(sm.history().length) + 1
+            _ => sm.history().length == old(sm.history().length)
+        }
+
+// ============================================================================
+// Hierarchical State Machine Support
+// ============================================================================
+
+spec pure fn flatten_compound_state[E, D](
+    compound: State[D],
+    children: Map[StateId, State[D]]
+) -> List[State[D]]
+  requires:
+    match compound.type {
+        Compound { children: c, .. } => forall id in c: children.contains_key(id)
+        _ => false
+    }
+
+spec pure fn is_descendant_of[D](
+    state: StateId,
+    ancestor: StateId,
+    states: Map[StateId, State[D]]
+) -> bool
+  decreases: states.size  // For termination checking
+
+spec pure fn find_common_ancestor[D](
+    state1: StateId,
+    state2: StateId,
+    states: Map[StateId, State[D]]
+) -> Option[StateId]

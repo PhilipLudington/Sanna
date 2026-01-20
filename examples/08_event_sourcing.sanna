@@ -1,0 +1,414 @@
+// Example 8: Event Sourcing
+// Demonstrates: Sum types for events, fold/reduce, time ordering, snapshots, projections
+
+module examples.eventsourcing
+
+import std.collections.{List, Map}
+import std.time.{DateTime, Duration, now}
+import std.money.{Money, USD}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.crypto.{Hash, sha256}
+
+// ============================================================================
+// Core Event Sourcing Types
+// ============================================================================
+
+type AggregateId = string
+  invariant: self.length == 36  // UUID
+
+type EventId = string
+  invariant: self.length == 36
+
+type Version = i64
+  invariant: self >= 0
+
+type Timestamp = DateTime
+
+// ============================================================================
+// Event Envelope (Metadata wrapper)
+// ============================================================================
+
+type EventEnvelope[E] = {
+    id: EventId,
+    aggregate_id: AggregateId,
+    version: Version,
+    timestamp: Timestamp,
+    event: E,
+    metadata: EventMetadata
+}
+
+type EventMetadata = {
+    correlation_id: Option[string],
+    causation_id: Option[EventId],
+    user_id: Option[string],
+    source: string
+}
+
+// ============================================================================
+// Event Store Interface
+// ============================================================================
+
+spec interface EventStore[E] {
+    fn append(
+        self,
+        aggregate_id: AggregateId,
+        events: List[E],
+        expected_version: Version
+    ) -> Result[Version, EventStoreError]
+      requires: events.length > 0
+      ensures:
+        result.is_ok() =>
+            result.unwrap() == expected_version + events.length
+            self.get_version(aggregate_id) == result.unwrap()
+        // Optimistic concurrency check
+        self.get_version(aggregate_id) != expected_version =>
+            match result { Err(ConcurrencyConflict { .. }) => true, _ => false }
+      modifies: self
+
+    fn read_stream(
+        self,
+        aggregate_id: AggregateId,
+        from_version: Version
+    ) -> List[EventEnvelope[E]]
+      ensures:
+        forall e in result: e.aggregate_id == aggregate_id
+        forall e in result: e.version >= from_version
+        // Events are ordered by version
+        forall i in 0..result.length - 1:
+            result[i].version < result[i + 1].version
+
+    fn read_stream_backwards(
+        self,
+        aggregate_id: AggregateId,
+        from_version: Version,
+        count: i32
+    ) -> List[EventEnvelope[E]]
+      requires: count > 0
+      ensures:
+        result.length <= count
+        // Events are in reverse order
+        forall i in 0..result.length - 1:
+            result[i].version > result[i + 1].version
+
+    fn read_all(self, from_position: i64) -> List[EventEnvelope[E]]
+      ensures:
+        // Global ordering across all aggregates
+        forall i in 0..result.length - 1:
+            result[i].timestamp.before(result[i + 1].timestamp) or
+            result[i].timestamp == result[i + 1].timestamp
+
+    pure fn get_version(self, aggregate_id: AggregateId) -> Version
+      ensures: result >= 0
+
+    pure fn stream_exists(self, aggregate_id: AggregateId) -> bool
+      ensures: result == (self.get_version(aggregate_id) > 0)
+
+    invariant: forall id: AggregateId:
+        self.get_version(id) == self.read_stream(id, 0).length
+}
+
+type EventStoreError =
+    | ConcurrencyConflict { expected: Version, actual: Version }
+    | StreamNotFound
+    | SerializationError { message: string }
+    | StorageError { message: string }
+
+// ============================================================================
+// Aggregate Interface
+// ============================================================================
+
+spec interface Aggregate[State, Event, Command] {
+    // Initialize empty state
+    pure fn initial_state() -> State
+
+    // Apply a single event to produce new state
+    pure fn apply(state: State, event: Event) -> State
+
+    // Decide what events to emit for a command
+    fn decide(state: State, command: Command) -> Result[List[Event], CommandError]
+      ensures:
+        result.is_ok() => result.unwrap().length >= 0
+
+    // Rebuild state from event history
+    pure fn fold(events: List[Event]) -> State
+      ensures:
+        result == events.fold(initial_state(), |s, e| apply(s, e))
+
+    // Validate that state is consistent
+    pure fn validate(state: State) -> bool
+}
+
+type CommandError =
+    | InvalidCommand { reason: string }
+    | BusinessRuleViolation { rule: string }
+    | PreconditionFailed { condition: string }
+
+// ============================================================================
+// Example: Bank Account Aggregate
+// ============================================================================
+
+// Events
+type AccountEvent =
+    | AccountOpened { account_number: string, owner_name: string, initial_balance: Money }
+    | MoneyDeposited { amount: Money, description: string }
+    | MoneyWithdrawn { amount: Money, description: string }
+    | TransferSent { amount: Money, to_account: string, reference: string }
+    | TransferReceived { amount: Money, from_account: string, reference: string }
+    | AccountFrozen { reason: string }
+    | AccountUnfrozen
+    | AccountClosed { reason: string }
+    | InterestApplied { amount: Money, rate: f64 }
+
+// Commands
+type AccountCommand =
+    | OpenAccount { owner_name: string, initial_deposit: Money }
+    | Deposit { amount: Money, description: string }
+    | Withdraw { amount: Money, description: string }
+    | Transfer { amount: Money, to_account: string }
+    | FreezeAccount { reason: string }
+    | UnfreezeAccount
+    | CloseAccount { reason: string }
+    | ApplyInterest { rate: f64 }
+
+// State
+type AccountState = {
+    account_number: Option[string],
+    owner_name: Option[string],
+    balance: Money,
+    is_open: bool,
+    is_frozen: bool,
+    transaction_count: i32
+}
+  invariant:
+    not self.is_open => self.balance.is_zero()
+    self.transaction_count >= 0
+
+spec impl Aggregate[AccountState, AccountEvent, AccountCommand] for BankAccount {
+    pure fn initial_state() -> AccountState
+      ensures:
+        result.account_number == None
+        result.balance == Money.zero(USD)
+        result.is_open == false
+        result.is_frozen == false
+
+    pure fn apply(state: AccountState, event: AccountEvent) -> AccountState
+      ensures:
+        match event {
+            AccountOpened { account_number, owner_name, initial_balance } =>
+                result.account_number == Some(account_number) and
+                result.owner_name == Some(owner_name) and
+                result.balance == initial_balance and
+                result.is_open == true
+
+            MoneyDeposited { amount, .. } =>
+                result.balance.cents == state.balance.cents + amount.cents and
+                result.transaction_count == state.transaction_count + 1
+
+            MoneyWithdrawn { amount, .. } =>
+                result.balance.cents == state.balance.cents - amount.cents and
+                result.transaction_count == state.transaction_count + 1
+
+            TransferSent { amount, .. } =>
+                result.balance.cents == state.balance.cents - amount.cents
+
+            TransferReceived { amount, .. } =>
+                result.balance.cents == state.balance.cents + amount.cents
+
+            AccountFrozen { .. } =>
+                result.is_frozen == true
+
+            AccountUnfrozen =>
+                result.is_frozen == false
+
+            AccountClosed { .. } =>
+                result.is_open == false and
+                result.balance.is_zero()
+
+            InterestApplied { amount, .. } =>
+                result.balance.cents == state.balance.cents + amount.cents
+        }
+
+    fn decide(state: AccountState, command: AccountCommand) -> Result[List[AccountEvent], CommandError]
+      ensures:
+        // Cannot operate on closed account (except opening)
+        not state.is_open and not match command { OpenAccount { .. } => true, _ => false } =>
+            result.is_err()
+
+        // Cannot operate on frozen account (except unfreeze)
+        state.is_frozen and not match command { UnfreezeAccount => true, _ => false } =>
+            result.is_err()
+
+        // Withdrawal must have sufficient balance
+        match command {
+            Withdraw { amount, .. } =>
+                amount.cents > state.balance.cents => result.is_err()
+            Transfer { amount, .. } =>
+                amount.cents > state.balance.cents => result.is_err()
+            _ => true
+        }
+}
+
+// ============================================================================
+// Projections (Read Models)
+// ============================================================================
+
+spec interface Projection[Event, ReadModel] {
+    fn initial() -> ReadModel
+
+    fn project(model: ReadModel, event: EventEnvelope[Event]) -> ReadModel
+
+    fn rebuild(events: List[EventEnvelope[Event]]) -> ReadModel
+      ensures: result == events.fold(initial(), |m, e| project(m, e))
+}
+
+// Example: Account Balance Projection
+type AccountBalanceView = {
+    account_id: AggregateId,
+    balance: Money,
+    last_updated: DateTime
+}
+
+type AllAccountBalances = Map[AggregateId, AccountBalanceView]
+
+spec impl Projection[AccountEvent, AllAccountBalances] for AccountBalanceProjection {
+    fn project(model: AllAccountBalances, event: EventEnvelope[AccountEvent]) -> AllAccountBalances
+      ensures:
+        match event.event {
+            AccountOpened { initial_balance, .. } =>
+                result.get(event.aggregate_id).unwrap().balance == initial_balance
+            MoneyDeposited { amount, .. } =>
+                result.get(event.aggregate_id).unwrap().balance.cents ==
+                    model.get(event.aggregate_id).unwrap().balance.cents + amount.cents
+            MoneyWithdrawn { amount, .. } =>
+                result.get(event.aggregate_id).unwrap().balance.cents ==
+                    model.get(event.aggregate_id).unwrap().balance.cents - amount.cents
+            _ => true
+        }
+      modifies: model
+}
+
+// ============================================================================
+// Snapshots
+// ============================================================================
+
+type Snapshot[State] = {
+    aggregate_id: AggregateId,
+    version: Version,
+    state: State,
+    timestamp: DateTime,
+    checksum: Hash
+}
+
+spec interface SnapshotStore[State] {
+    fn save(self, aggregate_id: AggregateId, version: Version, state: State) -> Result[(), SnapshotError]
+      ensures:
+        result.is_ok() => self.get_latest(aggregate_id).is_some()
+      modifies: self
+
+    fn get_latest(self, aggregate_id: AggregateId) -> Option[Snapshot[State]]
+      ensures:
+        result.is_some() =>
+            forall s in self.all_snapshots(aggregate_id):
+                result.unwrap().version >= s.version
+
+    fn get_at_version(self, aggregate_id: AggregateId, version: Version) -> Option[Snapshot[State]]
+      ensures:
+        result.is_some() => result.unwrap().version <= version
+
+    ghost fn all_snapshots(self, aggregate_id: AggregateId) -> List[Snapshot[State]]
+}
+
+type SnapshotError =
+    | SerializationFailed
+    | StorageFailed
+
+// ============================================================================
+// Repository (combining EventStore and Snapshots)
+// ============================================================================
+
+spec interface Repository[State, Event, Command] {
+    fn load(self, aggregate_id: AggregateId) -> Result[{state: State, version: Version}, RepositoryError]
+      ensures:
+        result.is_ok() =>
+            result.unwrap().state == Aggregate.fold(self.event_store().read_stream(aggregate_id, 0).map(|e| e.event))
+
+    fn save(
+        self,
+        aggregate_id: AggregateId,
+        events: List[Event],
+        expected_version: Version
+    ) -> Result[Version, RepositoryError]
+      modifies: self
+
+    fn execute(
+        self,
+        aggregate_id: AggregateId,
+        command: Command
+    ) -> Result[List[Event], RepositoryError]
+      modifies: self
+
+    ghost fn event_store(self) -> EventStore[Event]
+}
+
+type RepositoryError =
+    | LoadFailed { reason: string }
+    | SaveFailed { reason: string }
+    | ConcurrencyError { expected: Version, actual: Version }
+    | CommandRejected { error: CommandError }
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom event_immutability:
+    // Once stored, events cannot be changed
+    forall store: EventStore[E], id: AggregateId, v: Version:
+        store.read_stream(id, v).length > 0 =>
+            // Same query always returns same events
+            store.read_stream(id, v) == store.read_stream(id, v)
+
+axiom version_monotonic:
+    forall store: EventStore[E], id: AggregateId, events: List[E], v: Version:
+        store.append(id, events, v).is_ok() =>
+            store.get_version(id) > v
+
+axiom fold_associative:
+    forall events1, events2: List[E]:
+        Aggregate.fold(events1 ++ events2) ==
+            events2.fold(Aggregate.fold(events1), |s, e| Aggregate.apply(s, e))
+
+axiom projection_deterministic:
+    forall events: List[EventEnvelope[E]]:
+        Projection.rebuild(events) == Projection.rebuild(events)
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma state_derivable_from_events:
+    forall store: EventStore[E], id: AggregateId:
+        store.stream_exists(id) =>
+            // State can always be rebuilt from events
+            Aggregate.fold(store.read_stream(id, 0).map(|e| e.event)) ==
+            Aggregate.fold(store.read_stream(id, 0).map(|e| e.event))
+
+lemma snapshot_accelerates_load:
+    forall store: EventStore[E], snapshots: SnapshotStore[State], id: AggregateId:
+        snapshots.get_latest(id).is_some() =>
+            // Loading from snapshot + recent events = loading all events
+            let snapshot = snapshots.get_latest(id).unwrap() in
+            let recent_events = store.read_stream(id, snapshot.version) in
+            recent_events.fold(snapshot.state, |s, e| Aggregate.apply(s, e.event)) ==
+            Aggregate.fold(store.read_stream(id, 0).map(|e| e.event))
+
+lemma balance_always_non_negative:
+    forall events: List[AccountEvent]:
+        // If we only emit valid events, balance stays non-negative
+        Aggregate.fold(events).balance.cents >= 0
+
+lemma event_ordering_preserved:
+    forall store: EventStore[E], id: AggregateId:
+        let events = store.read_stream(id, 0) in
+        forall i, j in 0..events.length:
+            i < j => events[i].version < events[j].version

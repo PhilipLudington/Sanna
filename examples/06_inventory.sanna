@@ -1,0 +1,441 @@
+// Example 6: Inventory Management System
+// Demonstrates: Collections, refinement types, invariants, frame conditions, consistency
+
+module examples.inventory
+
+import std.collections.{List, Map, Set}
+import std.money.{Money, Currency, USD}
+import std.time.{DateTime, now}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+
+// ============================================================================
+// Product Identification
+// ============================================================================
+
+type SKU = string
+  invariant:
+    self.length >= 8
+    self.length <= 16
+    self.is_alphanumeric()
+
+type Barcode = string
+  invariant:
+    self.length == 12 or self.length == 13  // UPC-A or EAN-13
+
+type ProductId = string
+  invariant: self.length == 36  // UUID
+
+// ============================================================================
+// Quantity Types (Refinement Types)
+// ============================================================================
+
+type Quantity = i32
+  invariant: self >= 0
+
+type NonZeroQuantity = i32
+  invariant: self > 0
+
+type ReorderPoint = i32
+  invariant: self >= 0
+
+type MaxStock = i32
+  invariant: self > 0
+
+// ============================================================================
+// Location Types
+// ============================================================================
+
+type WarehouseId = string
+  invariant: self.length > 0
+
+type ZoneId = string
+
+type AisleId = string
+
+type ShelfId = string
+
+type BinId = string
+
+type Location = {
+    warehouse: WarehouseId,
+    zone: Option[ZoneId],
+    aisle: Option[AisleId],
+    shelf: Option[ShelfId],
+    bin: Option[BinId]
+}
+
+// ============================================================================
+// Product Definition
+// ============================================================================
+
+type Product = {
+    id: ProductId,
+    sku: SKU,
+    barcode: Option[Barcode],
+    name: string,
+    description: string,
+    category: Category,
+    unit_cost: Money,
+    unit_price: Money,
+    weight_grams: Option[i32],
+    dimensions: Option[Dimensions],
+    is_active: bool
+}
+  invariant:
+    self.name.length > 0
+    self.unit_price.cents >= self.unit_cost.cents  // Price >= cost
+    self.unit_price.currency == self.unit_cost.currency
+
+type Category = {
+    id: string,
+    name: string,
+    parent: Option[string]
+}
+
+type Dimensions = {
+    length_mm: i32,
+    width_mm: i32,
+    height_mm: i32
+}
+  invariant:
+    self.length_mm > 0
+    self.width_mm > 0
+    self.height_mm > 0
+
+// ============================================================================
+// Inventory Item
+// ============================================================================
+
+type InventoryItem = {
+    product_id: ProductId,
+    location: Location,
+    quantity: Quantity,
+    reserved_quantity: Quantity,
+    reorder_point: ReorderPoint,
+    max_stock: MaxStock,
+    lot_number: Option[string],
+    expiration_date: Option[DateTime],
+    last_counted: DateTime,
+    last_movement: DateTime
+}
+  invariant:
+    self.reserved_quantity <= self.quantity
+    self.reorder_point < self.max_stock
+    match self.expiration_date {
+        Some(exp) => exp.after(self.last_counted)
+        None => true
+    }
+
+// ============================================================================
+// Stock Levels
+// ============================================================================
+
+type StockLevel =
+    | InStock { available: Quantity }
+    | LowStock { available: Quantity, reorder_point: ReorderPoint }
+    | OutOfStock
+    | Backordered { expected_date: Option[DateTime] }
+
+spec pure fn calculate_stock_level(item: InventoryItem) -> StockLevel
+  ensures:
+    item.quantity == 0 => result == OutOfStock
+    item.quantity > 0 and item.quantity - item.reserved_quantity <= item.reorder_point =>
+        match result { LowStock { .. } => true, _ => false }
+    item.quantity - item.reserved_quantity > item.reorder_point =>
+        match result { InStock { .. } => true, _ => false }
+
+spec pure fn available_quantity(item: InventoryItem) -> Quantity
+  ensures: result == item.quantity - item.reserved_quantity
+
+// ============================================================================
+// Inventory Movements
+// ============================================================================
+
+type MovementType =
+    | Receive { purchase_order: string, supplier: string }
+    | Ship { sales_order: string, customer: string }
+    | Transfer { from_location: Location, to_location: Location }
+    | Adjustment { reason: AdjustmentReason }
+    | Return { order: string, condition: ReturnCondition }
+    | Write_Off { reason: string, approved_by: string }
+
+type AdjustmentReason =
+    | CycleCount
+    | Damage
+    | Theft
+    | Found
+    | DataCorrection
+
+type ReturnCondition =
+    | Resellable
+    | Damaged
+    | Defective
+
+type InventoryMovement = {
+    id: string,
+    product_id: ProductId,
+    movement_type: MovementType,
+    quantity: NonZeroQuantity,
+    location: Location,
+    timestamp: DateTime,
+    user_id: string,
+    notes: Option[string]
+}
+
+// ============================================================================
+// Inventory Service Interface
+// ============================================================================
+
+spec interface InventoryService {
+    // Stock queries
+    pure fn get_stock(self, product_id: ProductId, location: Location) -> Option[InventoryItem]
+
+    pure fn get_total_stock(self, product_id: ProductId) -> Quantity
+      ensures:
+        result == self.all_items_for_product(product_id)
+            .map(|item| item.quantity)
+            .fold(0, |acc, q| acc + q)
+
+    pure fn get_available_stock(self, product_id: ProductId) -> Quantity
+      ensures:
+        result == self.all_items_for_product(product_id)
+            .map(|item| available_quantity(item))
+            .fold(0, |acc, q| acc + q)
+
+    // Stock modifications
+    fn receive_stock(
+        self,
+        product_id: ProductId,
+        location: Location,
+        quantity: NonZeroQuantity,
+        purchase_order: string,
+        supplier: string
+    ) -> Result[InventoryItem, InventoryError]
+      requires: quantity > 0
+      ensures:
+        result.is_ok() =>
+            self.get_total_stock(product_id) == old(self.get_total_stock(product_id)) + quantity
+      modifies: self
+
+    fn ship_stock(
+        self,
+        product_id: ProductId,
+        location: Location,
+        quantity: NonZeroQuantity,
+        sales_order: string
+    ) -> Result[InventoryItem, InventoryError]
+      requires:
+        quantity > 0
+        self.get_available_stock(product_id) >= quantity
+      ensures:
+        result.is_ok() =>
+            self.get_total_stock(product_id) == old(self.get_total_stock(product_id)) - quantity
+      modifies: self
+
+    fn transfer_stock(
+        self,
+        product_id: ProductId,
+        from_location: Location,
+        to_location: Location,
+        quantity: NonZeroQuantity
+    ) -> Result[(), InventoryError]
+      requires:
+        quantity > 0
+        from_location != to_location
+        match self.get_stock(product_id, from_location) {
+            Some(item) => available_quantity(item) >= quantity
+            None => false
+        }
+      ensures:
+        // Total stock unchanged, just moved
+        result.is_ok() =>
+            self.get_total_stock(product_id) == old(self.get_total_stock(product_id))
+      modifies: self
+
+    fn adjust_stock(
+        self,
+        product_id: ProductId,
+        location: Location,
+        new_quantity: Quantity,
+        reason: AdjustmentReason
+    ) -> Result[InventoryMovement, InventoryError]
+      ensures:
+        result.is_ok() =>
+            self.get_stock(product_id, location).unwrap().quantity == new_quantity
+      modifies: self
+
+    // Reservations
+    fn reserve_stock(
+        self,
+        product_id: ProductId,
+        quantity: NonZeroQuantity,
+        order_id: string
+    ) -> Result[Reservation, InventoryError]
+      requires:
+        quantity > 0
+        self.get_available_stock(product_id) >= quantity
+      ensures:
+        result.is_ok() =>
+            self.get_available_stock(product_id) ==
+                old(self.get_available_stock(product_id)) - quantity
+            self.get_total_stock(product_id) == old(self.get_total_stock(product_id))
+      modifies: self
+
+    fn release_reservation(
+        self,
+        reservation_id: string
+    ) -> Result[(), InventoryError]
+      modifies: self
+
+    // Queries
+    pure fn low_stock_items(self) -> List[InventoryItem]
+      ensures:
+        forall item in result:
+            available_quantity(item) <= item.reorder_point
+
+    pure fn expiring_items(self, before: DateTime) -> List[InventoryItem]
+      ensures:
+        forall item in result:
+            item.expiration_date.is_some() and
+            item.expiration_date.unwrap().before(before)
+
+    pure fn items_needing_recount(self, older_than: DateTime) -> List[InventoryItem]
+      ensures:
+        forall item in result: item.last_counted.before(older_than)
+
+    // Ghost methods for specification
+    ghost fn all_items_for_product(self, product_id: ProductId) -> List[InventoryItem]
+    ghost fn all_reservations(self) -> List[Reservation]
+
+    // Invariants
+    invariant: forall item in self.all_items():
+        item.reserved_quantity <= item.quantity
+
+    invariant: forall item in self.all_items():
+        item.quantity >= 0
+
+    invariant: forall reservation in self.all_reservations():
+        reservation.quantity > 0
+}
+
+type Reservation = {
+    id: string,
+    product_id: ProductId,
+    quantity: NonZeroQuantity,
+    order_id: string,
+    created_at: DateTime,
+    expires_at: DateTime
+}
+  invariant: self.expires_at.after(self.created_at)
+
+type InventoryError =
+    | ProductNotFound
+    | LocationNotFound
+    | InsufficientStock { available: Quantity, requested: Quantity }
+    | ReservationNotFound
+    | ReservationExpired
+    | ItemExpired
+    | ConcurrentModification
+
+// ============================================================================
+// Batch Operations
+// ============================================================================
+
+type BatchReceive = {
+    items: List[{
+        product_id: ProductId,
+        quantity: NonZeroQuantity,
+        lot_number: Option[string]
+    }],
+    purchase_order: string,
+    supplier: string,
+    location: Location
+}
+
+spec fn receive_batch(
+    service: InventoryService,
+    batch: BatchReceive
+) -> Result[List[InventoryItem], InventoryError]
+  requires: batch.items.length > 0
+  ensures:
+    result.is_ok() => result.unwrap().length == batch.items.length
+  modifies: service
+
+// ============================================================================
+// Cycle Count (Physical Inventory)
+// ============================================================================
+
+type CycleCount = {
+    id: string,
+    location: Location,
+    items: List[CycleCountItem],
+    started_at: DateTime,
+    completed_at: Option[DateTime],
+    counted_by: string
+}
+
+type CycleCountItem = {
+    product_id: ProductId,
+    expected_quantity: Quantity,
+    counted_quantity: Quantity,
+    variance: i32
+}
+  invariant: self.variance == self.counted_quantity - self.expected_quantity
+
+spec fn reconcile_cycle_count(
+    service: InventoryService,
+    count: CycleCount
+) -> Result[List[InventoryMovement], InventoryError]
+  requires: count.completed_at.is_some()
+  ensures:
+    result.is_ok() =>
+        forall item in count.items:
+            service.get_stock(item.product_id, count.location).unwrap().quantity ==
+                item.counted_quantity
+  modifies: service
+
+// ============================================================================
+// Axioms and Invariants
+// ============================================================================
+
+axiom stock_conservation:
+    forall service: InventoryService, product_id: ProductId:
+        // Total stock only changes through receive, ship, or adjustment
+        service.get_total_stock(product_id) >= 0
+
+axiom reservation_consistency:
+    forall service: InventoryService, product_id: ProductId:
+        service.get_total_stock(product_id) >= service.get_available_stock(product_id)
+
+axiom fifo_for_expiring:
+    forall service: InventoryService, product_id: ProductId:
+        // Items with earlier expiration should be shipped first
+        true
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma transfer_preserves_total:
+    forall service: InventoryService, product_id: ProductId, from, to: Location, qty: NonZeroQuantity:
+        service.transfer_stock(product_id, from, to, qty).is_ok() =>
+            service.get_total_stock(product_id) == old(service.get_total_stock(product_id))
+
+lemma available_plus_reserved_equals_total:
+    forall item: InventoryItem:
+        available_quantity(item) + item.reserved_quantity == item.quantity
+
+lemma low_stock_implies_reorder:
+    forall item: InventoryItem:
+        available_quantity(item) <= item.reorder_point =>
+            match calculate_stock_level(item) {
+                LowStock { .. } => true
+                OutOfStock => true
+                _ => false
+            }
+
+lemma shipping_requires_available:
+    forall service: InventoryService, product_id: ProductId, qty: NonZeroQuantity:
+        service.get_available_stock(product_id) < qty =>
+            service.ship_stock(product_id, any_location, qty, any_order).is_err()

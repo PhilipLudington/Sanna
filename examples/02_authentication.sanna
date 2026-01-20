@@ -1,0 +1,291 @@
+// Example 2: User Authentication System
+// Demonstrates: Crypto types, password hashing, provenance, trust attributes, security invariants
+
+module examples.authentication
+
+import std.crypto.{Hash, Salt, PasswordHash, HashAlgorithm, SHA256, Argon2id}
+import std.crypto.{hash_password, verify_password, generate_salt, random_bytes}
+import std.time.{DateTime, Duration, hours}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+import std.collections.{Map, List}
+
+// ============================================================================
+// User Identity Types
+// ============================================================================
+
+type UserId = string
+  invariant: self.length == 36  // UUID format
+
+type Email = string
+  invariant:
+    self.contains("@")
+    self.length >= 5
+    self.length <= 254
+
+type Username = string
+  invariant:
+    self.length >= 3
+    self.length <= 32
+    self.is_alphanumeric_with_underscore()
+
+// ============================================================================
+// Password Requirements (Refinement Type)
+// ============================================================================
+
+type Password = string
+  invariant:
+    self.length >= 12           // Minimum length
+    self.has_uppercase()        // At least one uppercase
+    self.has_lowercase()        // At least one lowercase
+    self.has_digit()            // At least one digit
+    self.has_special_char()     // At least one special character
+
+type WeakPassword = string
+  invariant: self.length >= 8  // Legacy systems
+
+// ============================================================================
+// User Credentials (stored in database)
+// ============================================================================
+
+type StoredCredentials = {
+    user_id: UserId,
+    password_hash: PasswordHash,
+    created_at: DateTime,
+    last_password_change: DateTime,
+    failed_attempts: i32,
+    locked_until: Option[DateTime]
+}
+  invariant:
+    self.failed_attempts >= 0
+    self.password_hash.salt.length >= 16
+    self.password_hash.algorithm.is_secure()
+
+// ============================================================================
+// Authentication Tokens
+// ============================================================================
+
+type TokenId = string
+  invariant: self.length == 32
+
+type SessionToken = {
+    id: TokenId,
+    user_id: UserId,
+    created_at: DateTime,
+    expires_at: DateTime,
+    fingerprint: Hash  // Browser/device fingerprint
+}
+  invariant:
+    self.expires_at.after(self.created_at)
+    self.fingerprint.algorithm == SHA256
+
+type RefreshToken = {
+    id: TokenId,
+    user_id: UserId,
+    session_id: TokenId,
+    created_at: DateTime,
+    expires_at: DateTime,
+    revoked: bool
+}
+  invariant:
+    self.expires_at.after(self.created_at)
+
+// ============================================================================
+// Authentication Results
+// ============================================================================
+
+type AuthResult =
+    | Success { session: SessionToken, refresh: RefreshToken }
+    | InvalidCredentials
+    | AccountLocked { until: DateTime, reason: string }
+    | AccountDisabled
+    | RequiresMFA { challenge_id: string }
+    | PasswordExpired
+
+type AuthError =
+    | UserNotFound
+    | InvalidPassword
+    | TooManyAttempts { lockout_duration: Duration }
+    | TokenExpired
+    | TokenRevoked
+    | SessionNotFound
+
+// ============================================================================
+// Multi-Factor Authentication
+// ============================================================================
+
+type MFAMethod =
+    | TOTP { secret: Array[u8] }        // Time-based OTP
+    | SMS { phone_number: string }
+    | Email { email: Email }
+    | SecurityKey { credential_id: string }
+    | BackupCodes { codes: List[Hash] }
+
+type MFAChallenge = {
+    id: string,
+    user_id: UserId,
+    method: MFAMethod,
+    created_at: DateTime,
+    expires_at: DateTime,
+    attempts: i32
+}
+  invariant:
+    self.attempts <= 3
+    self.expires_at.duration_since(self.created_at).as_mins() <= 5
+
+// ============================================================================
+// Password Hashing Specification
+// ============================================================================
+
+@author(human, identity: "security-team")
+@confidence(0.99)
+@verified(status: proven, obligations: ["password_never_stored_plaintext"])
+spec fn create_password_hash(password: Password) -> PasswordHash
+  ensures:
+    result.algorithm == Argon2id
+    result.salt.is_cryptographically_random()
+    result.params.time_cost >= 3
+    result.params.memory_cost_kb >= 65536
+    // Password is never stored or logged
+    not exists log: List[string]: log.contains(password)
+
+@trusted(reason: "Constant-time comparison prevents timing attacks")
+spec pure fn verify_password_safe(password: string, stored: PasswordHash) -> bool
+  ensures:
+    result == verify_password(password, stored)
+    // Execution time is constant regardless of password correctness
+
+// ============================================================================
+// Authentication Service Interface
+// ============================================================================
+
+spec interface AuthService {
+    fn authenticate(
+        self,
+        username: Username,
+        password: string,
+        device_fingerprint: Hash
+    ) -> Result[AuthResult, AuthError]
+      ensures:
+        // Rate limiting
+        old(self.get_failed_attempts(username)) >= 5 =>
+            match result {
+                Err(TooManyAttempts { .. }) => true
+                _ => false
+            }
+        // Successful auth resets failed attempts
+        result.is_ok() and match result.unwrap() { Success { .. } => true, _ => false } =>
+            self.get_failed_attempts(username) == 0
+      modifies: self
+
+    fn logout(self, session_id: TokenId) -> Result[(), AuthError]
+      ensures:
+        result.is_ok() => not self.is_session_valid(session_id)
+      modifies: self
+
+    fn refresh_session(
+        self,
+        refresh_token: RefreshToken,
+        device_fingerprint: Hash
+    ) -> Result[SessionToken, AuthError]
+      requires: not refresh_token.revoked
+      ensures:
+        result.is_ok() => result.unwrap().user_id == refresh_token.user_id
+      modifies: self
+
+    fn change_password(
+        self,
+        user_id: UserId,
+        old_password: string,
+        new_password: Password
+    ) -> Result[(), AuthError]
+      requires: new_password != old_password
+      ensures:
+        result.is_ok() =>
+            not verify_password_safe(old_password, self.get_credentials(user_id).password_hash)
+            verify_password_safe(new_password, self.get_credentials(user_id).password_hash)
+      modifies: self
+
+    fn initiate_mfa(self, user_id: UserId, method: MFAMethod) -> Result[MFAChallenge, AuthError]
+      modifies: self
+
+    fn verify_mfa(self, challenge_id: string, response: string) -> Result[AuthResult, AuthError]
+      modifies: self
+
+    // Query methods
+    pure fn is_session_valid(self, session_id: TokenId) -> bool
+    pure fn get_failed_attempts(self, username: Username) -> i32
+    ghost fn get_credentials(self, user_id: UserId) -> StoredCredentials
+
+    invariant: forall creds in self.all_credentials():
+        creds.password_hash.algorithm.is_secure()
+}
+
+// ============================================================================
+// Security Invariants
+// ============================================================================
+
+invariant password_complexity:
+    forall p: Password:
+        p.length >= 12 and
+        p.has_uppercase() and
+        p.has_lowercase() and
+        p.has_digit()
+
+invariant credential_security:
+    forall creds: StoredCredentials:
+        creds.password_hash.algorithm != MD5 and
+        creds.password_hash.algorithm != SHA1
+
+invariant session_bounded_lifetime:
+    forall session: SessionToken:
+        session.expires_at.duration_since(session.created_at).as_hours() <= 24
+
+invariant refresh_token_longer_lived:
+    forall session: SessionToken, refresh: RefreshToken:
+        session.id == refresh.session_id =>
+            refresh.expires_at.after(session.expires_at)
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom password_hash_irreversible:
+    forall password: string, hash: PasswordHash:
+        hash == hash_password(password, hash.algorithm) =>
+            not exists reverse: fn(PasswordHash) -> string
+
+axiom failed_attempts_monotonic_until_reset:
+    forall auth: AuthService, username: Username:
+        auth.authenticate(username, wrong_password, fp).is_err() =>
+            auth.get_failed_attempts(username) > old(auth.get_failed_attempts(username))
+
+axiom successful_auth_requires_correct_password:
+    forall auth: AuthService, username: Username, password: string:
+        match auth.authenticate(username, password, fp) {
+            Ok(Success { .. }) => verify_password_safe(password, auth.get_credentials(username).password_hash)
+            _ => true
+        }
+
+// ============================================================================
+// Lemmas for Verification
+// ============================================================================
+
+lemma lockout_prevents_brute_force:
+    forall auth: AuthService, username: Username:
+        auth.get_failed_attempts(username) >= 5 =>
+            auth.authenticate(username, any_password, fp).is_err()
+
+lemma mfa_increases_security:
+    forall user: UserId, method: MFAMethod:
+        // MFA challenge must be verified within time limit
+        forall challenge: MFAChallenge:
+            challenge.user_id == user =>
+                challenge.expires_at.duration_since(challenge.created_at).as_mins() <= 5
+
+@needs_review(reason: "Verify constant-time implementation")
+lemma timing_attack_resistance:
+    forall password1, password2: string, stored: PasswordHash:
+        // Verification time should be constant
+        execution_time(verify_password_safe(password1, stored)) ==
+        execution_time(verify_password_safe(password2, stored))

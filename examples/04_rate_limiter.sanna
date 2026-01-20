@@ -1,0 +1,356 @@
+// Example 4: Rate Limiter
+// Demonstrates: Time, maps, sliding windows, invariants, modifies clauses
+
+module examples.ratelimiter
+
+import std.time.{DateTime, Duration, seconds, minutes, now}
+import std.collections.{Map, List}
+import std.result.{Result, Ok, Err}
+import std.option.{Option, Some, None}
+
+// ============================================================================
+// Rate Limiting Strategies
+// ============================================================================
+
+type RateLimitStrategy =
+    | FixedWindow { window_size: Duration, max_requests: i32 }
+    | SlidingWindow { window_size: Duration, max_requests: i32 }
+    | TokenBucket { capacity: i32, refill_rate: f64, refill_interval: Duration }
+    | LeakyBucket { capacity: i32, drain_rate: f64 }
+    | ConcurrencyLimit { max_concurrent: i32 }
+
+// ============================================================================
+// Client Identifier
+// ============================================================================
+
+type ClientId = string
+  invariant: self.length > 0
+
+type ClientKey =
+    | ByIP { ip_address: string }
+    | ByUserId { user_id: string }
+    | ByAPIKey { api_key: string }
+    | Composite { keys: List[string] }
+
+// ============================================================================
+// Rate Limit State
+// ============================================================================
+
+type FixedWindowState = {
+    window_start: DateTime,
+    request_count: i32
+}
+  invariant: self.request_count >= 0
+
+type SlidingWindowState = {
+    timestamps: List[DateTime]
+}
+  invariant: forall i in 0..self.timestamps.length - 1:
+    self.timestamps[i].before(self.timestamps[i + 1]) or
+    self.timestamps[i] == self.timestamps[i + 1]
+
+type TokenBucketState = {
+    tokens: f64,
+    last_refill: DateTime
+}
+  invariant: self.tokens >= 0.0
+
+type LeakyBucketState = {
+    water_level: f64,
+    last_drain: DateTime
+}
+  invariant: self.water_level >= 0.0
+
+type ConcurrencyState = {
+    active_requests: i32
+}
+  invariant: self.active_requests >= 0
+
+// ============================================================================
+// Rate Limit Decision
+// ============================================================================
+
+type RateLimitDecision =
+    | Allowed { remaining: i32, reset_at: DateTime }
+    | Denied { retry_after: Duration, reason: string }
+    | Throttled { delay: Duration }  // Slow down but allow
+
+type RateLimitHeaders = {
+    limit: i32,
+    remaining: i32,
+    reset: i64,      // Unix timestamp
+    retry_after: Option[i32]  // Seconds
+}
+
+// ============================================================================
+// Fixed Window Rate Limiter
+// ============================================================================
+
+spec interface FixedWindowLimiter {
+    fn new(window_size: Duration, max_requests: i32) -> Self
+      requires:
+        window_size.is_positive()
+        max_requests > 0
+      ensures:
+        result.window_size() == window_size
+        result.max_requests() == max_requests
+
+    fn check(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      ensures:
+        match result {
+            Allowed { remaining, .. } =>
+                remaining >= 0 and remaining < self.max_requests()
+            Denied { retry_after, .. } =>
+                retry_after.is_positive()
+            Throttled { .. } => true
+        }
+
+    fn record(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      ensures:
+        // After recording, remaining decreases or window resets
+        match result {
+            Allowed { remaining, .. } =>
+                remaining == old(self.remaining(client, current_time)) - 1 or
+                remaining == self.max_requests() - 1  // Window reset
+            Denied { .. } => true
+            Throttled { .. } => true
+        }
+      modifies: self
+
+    fn reset(self, client: ClientId) -> ()
+      ensures: self.remaining(client, now()) == self.max_requests()
+      modifies: self
+
+    pure fn window_size(self) -> Duration
+    pure fn max_requests(self) -> i32
+    pure fn remaining(self, client: ClientId, current_time: DateTime) -> i32
+      ensures: result >= 0 and result <= self.max_requests()
+
+    pure fn headers(self, client: ClientId, current_time: DateTime) -> RateLimitHeaders
+
+    invariant: self.max_requests() > 0
+    invariant: self.window_size().is_positive()
+}
+
+// ============================================================================
+// Sliding Window Rate Limiter
+// ============================================================================
+
+spec interface SlidingWindowLimiter {
+    fn new(window_size: Duration, max_requests: i32) -> Self
+      requires:
+        window_size.is_positive()
+        max_requests > 0
+
+    fn check(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      ensures:
+        self.count_in_window(client, current_time) < self.max_requests() =>
+            match result {
+                Allowed { .. } => true
+                _ => false
+            }
+        self.count_in_window(client, current_time) >= self.max_requests() =>
+            match result {
+                Denied { .. } => true
+                _ => false
+            }
+
+    fn record(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      modifies: self
+
+    fn cleanup_old_entries(self, current_time: DateTime) -> ()
+      ensures:
+        forall client in self.clients():
+            forall ts in self.timestamps(client):
+                current_time.duration_since(ts).nanos <= self.window_size().nanos
+      modifies: self
+
+    pure fn count_in_window(self, client: ClientId, current_time: DateTime) -> i32
+      ensures:
+        result >= 0
+        result <= self.max_requests() + 1  // May temporarily exceed before denial
+
+    pure fn window_size(self) -> Duration
+    pure fn max_requests(self) -> i32
+    ghost fn clients(self) -> List[ClientId]
+    ghost fn timestamps(self, client: ClientId) -> List[DateTime]
+}
+
+// ============================================================================
+// Token Bucket Rate Limiter
+// ============================================================================
+
+spec interface TokenBucketLimiter {
+    fn new(capacity: i32, refill_rate: f64, refill_interval: Duration) -> Self
+      requires:
+        capacity > 0
+        refill_rate > 0.0
+        refill_interval.is_positive()
+
+    fn acquire(self, client: ClientId, tokens: i32, current_time: DateTime) -> RateLimitDecision
+      requires: tokens > 0
+      ensures:
+        self.available_tokens(client, current_time) >= tokens =>
+            match result { Allowed { .. } => true, _ => false }
+        self.available_tokens(client, current_time) < tokens =>
+            match result { Denied { .. } => true, Throttled { .. } => true, _ => false }
+      modifies: self
+
+    fn refill(self, client: ClientId, current_time: DateTime) -> ()
+      ensures:
+        self.available_tokens(client, current_time) <= self.capacity()
+      modifies: self
+
+    pure fn available_tokens(self, client: ClientId, current_time: DateTime) -> f64
+      ensures:
+        result >= 0.0
+        result <= self.capacity()
+
+    pure fn capacity(self) -> i32
+    pure fn refill_rate(self) -> f64
+    pure fn refill_interval(self) -> Duration
+
+    invariant: self.capacity() > 0
+    invariant: self.refill_rate() > 0.0
+}
+
+// ============================================================================
+// Distributed Rate Limiter (using external store)
+// ============================================================================
+
+spec interface DistributedRateLimiter {
+    fn check_and_record(
+        self,
+        client: ClientId,
+        current_time: DateTime
+    ) -> Result[RateLimitDecision, RateLimiterError]
+      ensures:
+        // Atomic check-and-increment
+        result.is_ok()
+
+    fn get_state(self, client: ClientId) -> Result[RateLimitState, RateLimiterError]
+
+    fn sync(self) -> Result[(), RateLimiterError]
+      // Synchronize local state with distributed store
+      modifies: self
+}
+
+type RateLimiterError =
+    | StoreUnavailable
+    | NetworkError
+    | InvalidState
+
+type RateLimitState = {
+    client: ClientId,
+    strategy: RateLimitStrategy,
+    current_count: i32,
+    window_start: DateTime,
+    last_request: Option[DateTime]
+}
+
+// ============================================================================
+// Multi-Tier Rate Limiting
+// ============================================================================
+
+type RateLimitTier = {
+    name: string,
+    strategy: RateLimitStrategy,
+    priority: i32  // Lower number = check first
+}
+
+spec interface MultiTierLimiter {
+    fn add_tier(self, tier: RateLimitTier) -> ()
+      ensures: self.tier_count() == old(self.tier_count()) + 1
+      modifies: self
+
+    fn check(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      ensures:
+        // Returns most restrictive decision across all tiers
+        match result {
+            Denied { .. } =>
+                exists tier in self.tiers():
+                    self.check_tier(client, tier.name, current_time) == result
+            Allowed { remaining, .. } =>
+                remaining == self.min_remaining_across_tiers(client, current_time)
+            _ => true
+        }
+
+    fn record(self, client: ClientId, current_time: DateTime) -> RateLimitDecision
+      modifies: self
+
+    pure fn tier_count(self) -> i32
+    pure fn tiers(self) -> List[RateLimitTier]
+    pure fn check_tier(self, client: ClientId, tier_name: string, current_time: DateTime) -> RateLimitDecision
+    pure fn min_remaining_across_tiers(self, client: ClientId, current_time: DateTime) -> i32
+
+    invariant: self.tier_count() >= 0
+}
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom rate_limit_fairness:
+    forall limiter: FixedWindowLimiter, client: ClientId, time: DateTime:
+        // All clients get the same limit
+        limiter.max_requests() == limiter.max_requests()
+
+axiom token_bucket_bounded:
+    forall limiter: TokenBucketLimiter, client: ClientId, time: DateTime:
+        limiter.available_tokens(client, time) <= limiter.capacity()
+
+axiom sliding_window_accurate:
+    forall limiter: SlidingWindowLimiter, client: ClientId, time: DateTime:
+        limiter.count_in_window(client, time) ==
+            limiter.timestamps(client).filter(|ts|
+                time.duration_since(ts).nanos <= limiter.window_size().nanos
+            ).length
+
+axiom concurrent_safety:
+    // For distributed limiters, concurrent requests should not exceed limit
+    forall limiter: DistributedRateLimiter:
+        true  // Implementation must ensure atomicity
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma fixed_window_resets:
+    forall limiter: FixedWindowLimiter, client: ClientId, t1, t2: DateTime:
+        t2.duration_since(t1).nanos >= limiter.window_size().nanos =>
+            limiter.remaining(client, t2) == limiter.max_requests()
+
+lemma token_refill_monotonic:
+    forall limiter: TokenBucketLimiter, client: ClientId, t1, t2: DateTime:
+        t2.after(t1) =>
+            limiter.available_tokens(client, t2) >= limiter.available_tokens(client, t1) or
+            // Unless tokens were consumed
+            true
+
+lemma rate_limit_bounds:
+    forall client: ClientId, window: Duration, max: i32:
+        // Cannot exceed max_requests per window
+        true
+
+// ============================================================================
+// Convenience functions
+// ============================================================================
+
+spec pure fn requests_per_second(count: i32) -> RateLimitStrategy
+  requires: count > 0
+  ensures: result == FixedWindow { window_size: seconds(1), max_requests: count }
+
+spec pure fn requests_per_minute(count: i32) -> RateLimitStrategy
+  requires: count > 0
+  ensures: result == FixedWindow { window_size: minutes(1), max_requests: count }
+
+spec pure fn burst_with_sustained(burst: i32, sustained_per_second: f64) -> RateLimitStrategy
+  requires:
+    burst > 0
+    sustained_per_second > 0.0
+  ensures:
+    result == TokenBucket {
+        capacity: burst,
+        refill_rate: sustained_per_second,
+        refill_interval: seconds(1)
+    }

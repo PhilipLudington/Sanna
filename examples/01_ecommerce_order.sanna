@@ -1,0 +1,258 @@
+// Example 1: E-commerce Order System
+// Demonstrates: Money types, collections, sum types, invariants, requires/ensures
+
+module examples.ecommerce
+
+import std.money.{Money, Currency, USD, Percentage}
+import std.collections.{List, Map}
+import std.time.{DateTime}
+import std.result.{Result, Ok, Err}
+
+// ============================================================================
+// Product and Cart Items
+// ============================================================================
+
+type ProductId = string
+  invariant: self.length > 0 and self.length <= 36
+
+type SKU = string
+  invariant: self.length == 12  // Standard SKU format
+
+type Product = {
+    id: ProductId,
+    sku: SKU,
+    name: string,
+    price: Money,
+    in_stock: bool
+}
+  invariant:
+    self.name.length > 0
+    self.price.is_positive() or self.price.is_zero()
+
+type CartItem = {
+    product: Product,
+    quantity: i32
+}
+  invariant: self.quantity > 0
+
+// ============================================================================
+// Order Status (Sum Type)
+// ============================================================================
+
+type OrderStatus =
+    | Pending
+    | Confirmed { confirmed_at: DateTime }
+    | Shipped { shipped_at: DateTime, tracking_number: string }
+    | Delivered { delivered_at: DateTime }
+    | Cancelled { cancelled_at: DateTime, reason: string }
+    | Refunded { refunded_at: DateTime, amount: Money }
+
+// ============================================================================
+// Discount Types
+// ============================================================================
+
+type Discount =
+    | PercentOff { percentage: Percentage }
+    | AmountOff { amount: Money }
+    | BuyXGetY { buy: i32, get_free: i32 }
+
+// ============================================================================
+// Order Type
+// ============================================================================
+
+type Order = {
+    id: string,
+    customer_id: string,
+    items: List[CartItem],
+    subtotal: Money,
+    discount: Option[Discount],
+    tax_rate: Percentage,
+    tax_amount: Money,
+    total: Money,
+    status: OrderStatus,
+    created_at: DateTime
+}
+  invariant:
+    self.items.length > 0                    // Orders must have items
+    self.subtotal.currency == self.total.currency
+    self.tax_amount.currency == self.total.currency
+    self.total.cents >= self.tax_amount.cents
+
+// ============================================================================
+// Cart Operations
+// ============================================================================
+
+spec interface Cart {
+    fn new(currency: Currency) -> Self
+      ensures:
+        result.item_count() == 0
+        result.subtotal().is_zero()
+
+    fn add_item(self, product: Product, quantity: i32) -> Result[(), CartError]
+      requires: quantity > 0
+      ensures:
+        result.is_ok() =>
+            self.item_count() == old(self.item_count()) + quantity
+            self.contains_product(product.id)
+      modifies: self
+
+    fn remove_item(self, product_id: ProductId) -> Result[CartItem, CartError]
+      ensures:
+        result.is_ok() => not self.contains_product(product_id)
+      modifies: self
+
+    fn update_quantity(self, product_id: ProductId, quantity: i32) -> Result[(), CartError]
+      requires: quantity > 0
+      ensures:
+        result.is_ok() => self.get_quantity(product_id) == Some(quantity)
+      modifies: self
+
+    pure fn item_count(self) -> i32
+      ensures: result >= 0
+
+    pure fn subtotal(self) -> Money
+      ensures:
+        result.cents == self.items().fold(0, |acc, item|
+            acc + item.product.price.cents * item.quantity
+        )
+
+    pure fn contains_product(self, product_id: ProductId) -> bool
+      ensures: result == exists item in self.items(): item.product.id == product_id
+
+    pure fn get_quantity(self, product_id: ProductId) -> Option[i32]
+
+    pure fn items(self) -> List[CartItem]
+
+    invariant: forall item in self.items(): item.quantity > 0
+}
+
+type CartError =
+    | ProductNotFound
+    | InsufficientStock
+    | InvalidQuantity
+    | CartEmpty
+
+// ============================================================================
+// Order Calculations
+// ============================================================================
+
+spec pure fn calculate_subtotal(items: List[CartItem]) -> Money
+  requires: items.length > 0
+  ensures:
+    result.cents == items.fold(0, |acc, item|
+        acc + item.product.price.cents * item.quantity
+    )
+    forall item in items: result.currency == item.product.price.currency
+
+spec pure fn apply_discount(subtotal: Money, discount: Discount) -> Money
+  ensures:
+    match discount {
+        PercentOff { percentage } =>
+            result == subtotal.subtract_percentage(percentage)
+        AmountOff { amount } =>
+            amount.cents <= subtotal.cents =>
+                result.cents == subtotal.cents - amount.cents
+            amount.cents > subtotal.cents =>
+                result.cents == 0
+        BuyXGetY { .. } =>
+            result.cents <= subtotal.cents
+    }
+    result.currency == subtotal.currency
+
+spec pure fn calculate_tax(amount: Money, tax_rate: Percentage) -> Money
+  ensures:
+    result == amount.percentage_of(tax_rate)
+    result.currency == amount.currency
+
+spec pure fn calculate_total(subtotal: Money, discount: Option[Discount], tax_rate: Percentage) -> Money
+  ensures:
+    match discount {
+        None => result == subtotal.with_tax(tax_rate)
+        Some(d) => result == apply_discount(subtotal, d).with_tax(tax_rate)
+    }
+
+// ============================================================================
+// Order State Transitions
+// ============================================================================
+
+spec fn confirm_order(order: Order) -> Result[Order, OrderError]
+  requires:
+    match order.status {
+        Pending => true
+        _ => false
+    }
+  ensures:
+    result.is_ok() =>
+        match result.unwrap().status {
+            Confirmed { .. } => true
+            _ => false
+        }
+        result.unwrap().total == order.total
+  modifies: order
+
+spec fn ship_order(order: Order, tracking: string) -> Result[Order, OrderError]
+  requires:
+    match order.status {
+        Confirmed { .. } => true
+        _ => false
+    }
+    tracking.length > 0
+  ensures:
+    result.is_ok() =>
+        match result.unwrap().status {
+            Shipped { tracking_number, .. } => tracking_number == tracking
+            _ => false
+        }
+  modifies: order
+
+spec fn cancel_order(order: Order, reason: string) -> Result[Order, OrderError]
+  requires:
+    match order.status {
+        Pending => true
+        Confirmed { .. } => true
+        _ => false  // Cannot cancel shipped/delivered orders
+    }
+  ensures:
+    result.is_ok() =>
+        match result.unwrap().status {
+            Cancelled { reason: r, .. } => r == reason
+            _ => false
+        }
+  modifies: order
+
+type OrderError =
+    | InvalidStatusTransition
+    | PaymentFailed
+    | InventoryUnavailable
+
+// ============================================================================
+// Axioms and Lemmas
+// ============================================================================
+
+axiom discount_never_increases_price:
+    forall subtotal: Money, discount: Discount:
+        apply_discount(subtotal, discount).cents <= subtotal.cents
+
+axiom total_equals_sum:
+    forall order: Order:
+        order.discount == None =>
+            order.total.cents == order.subtotal.cents + order.tax_amount.cents
+
+lemma order_integrity:
+    forall order: Order:
+        order.items.length > 0 and
+        order.total.cents >= 0 and
+        order.subtotal.cents >= 0
+
+// ============================================================================
+// Provenance attributes (for AI-assisted development)
+// ============================================================================
+
+@author(human, identity: "commerce-team")
+@confidence(0.95)
+@verified(status: proven, obligations: ["cart_invariants", "order_transitions"])
+spec fn validate_order(order: Order) -> Result[(), List[string]]
+  ensures:
+    result.is_ok() =>
+        order.items.length > 0
+        order.total.is_positive()

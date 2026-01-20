@@ -1,0 +1,397 @@
+// Example 7: Binary Search Tree
+// Demonstrates: Recursive types, model types, termination (decreases), lemmas, inductive proofs
+
+module examples.bst
+
+import std.option.{Option, Some, None}
+import std.collections.{List}
+import std.ordering.{Ord, Eq, Ordering, Less, Greater, Equal}
+
+// ============================================================================
+// Binary Search Tree Type (Recursive Sum Type)
+// ============================================================================
+
+type BST[K: Ord, V] =
+    | Empty
+    | Node {
+        key: K,
+        value: V,
+        left: BST[K, V],
+        right: BST[K, V]
+    }
+
+// ============================================================================
+// Model Type: Ordered Set (for specification)
+// ============================================================================
+
+model OrderedSet[T: Ord] {
+    empty: OrderedSet[T]
+    singleton(elem: T) -> OrderedSet[T]
+    union(self, other: OrderedSet[T]) -> OrderedSet[T]
+    contains(self, elem: T) -> bool
+    size(self) -> nat
+    min(self) -> Option[T]
+    max(self) -> Option[T]
+    to_sorted_list(self) -> List[T]
+
+    axiom empty_size:
+        empty.size == 0
+
+    axiom singleton_size:
+        singleton(x).size == 1
+
+    axiom singleton_contains:
+        singleton(x).contains(x)
+
+    axiom union_contains:
+        self.union(other).contains(x) == (self.contains(x) or other.contains(x))
+
+    axiom sorted_list_ordered:
+        forall i, j in 0..self.to_sorted_list().length:
+            i < j => self.to_sorted_list()[i] < self.to_sorted_list()[j]
+}
+
+// ============================================================================
+// BST Properties (for specification)
+// ============================================================================
+
+spec pure fn is_bst[K: Ord, V](tree: BST[K, V]) -> bool
+  ensures:
+    match tree {
+        Empty => result == true
+        Node { key, left, right, .. } =>
+            result == (
+                is_bst(left) and
+                is_bst(right) and
+                all_keys_less_than(left, key) and
+                all_keys_greater_than(right, key)
+            )
+    }
+  decreases: tree.size()
+
+spec pure fn all_keys_less_than[K: Ord, V](tree: BST[K, V], bound: K) -> bool
+  ensures:
+    match tree {
+        Empty => result == true
+        Node { key, left, right, .. } =>
+            result == (key < bound and all_keys_less_than(left, bound) and all_keys_less_than(right, bound))
+    }
+  decreases: tree.size()
+
+spec pure fn all_keys_greater_than[K: Ord, V](tree: BST[K, V], bound: K) -> bool
+  ensures:
+    match tree {
+        Empty => result == true
+        Node { key, left, right, .. } =>
+            result == (key > bound and all_keys_greater_than(left, bound) and all_keys_greater_than(right, bound))
+    }
+  decreases: tree.size()
+
+// ============================================================================
+// Size and Height
+// ============================================================================
+
+spec pure fn size[K: Ord, V](tree: BST[K, V]) -> nat
+  ensures:
+    match tree {
+        Empty => result == 0
+        Node { left, right, .. } => result == 1 + size(left) + size(right)
+    }
+  decreases: tree  // Structural recursion
+
+spec pure fn height[K: Ord, V](tree: BST[K, V]) -> nat
+  ensures:
+    match tree {
+        Empty => result == 0
+        Node { left, right, .. } => result == 1 + max(height(left), height(right))
+    }
+  decreases: tree
+
+spec pure fn is_empty[K: Ord, V](tree: BST[K, V]) -> bool
+  ensures:
+    result == match tree { Empty => true, _ => false }
+    result == (size(tree) == 0)
+
+// ============================================================================
+// Lookup Operations
+// ============================================================================
+
+spec pure fn contains[K: Ord, V](tree: BST[K, V], key: K) -> bool
+  requires: is_bst(tree)
+  ensures:
+    match tree {
+        Empty => result == false
+        Node { key: k, left, right, .. } =>
+            match key.compare(k) {
+                Equal => result == true
+                Less => result == contains(left, key)
+                Greater => result == contains(right, key)
+            }
+    }
+  decreases: size(tree)
+
+spec pure fn get[K: Ord, V](tree: BST[K, V], key: K) -> Option[V]
+  requires: is_bst(tree)
+  ensures:
+    contains(tree, key) <=> result.is_some()
+    match tree {
+        Empty => result == None
+        Node { key: k, value, left, right } =>
+            match key.compare(k) {
+                Equal => result == Some(value)
+                Less => result == get(left, key)
+                Greater => result == get(right, key)
+            }
+    }
+  decreases: size(tree)
+
+spec pure fn min_key[K: Ord, V](tree: BST[K, V]) -> Option[K]
+  requires: is_bst(tree)
+  ensures:
+    match tree {
+        Empty => result == None
+        Node { key, left: Empty, .. } => result == Some(key)
+        Node { left, .. } => result == min_key(left)
+    }
+    result.is_some() => forall k in keys(tree): result.unwrap() <= k
+  decreases: size(tree)
+
+spec pure fn max_key[K: Ord, V](tree: BST[K, V]) -> Option[K]
+  requires: is_bst(tree)
+  ensures:
+    match tree {
+        Empty => result == None
+        Node { key, right: Empty, .. } => result == Some(key)
+        Node { right, .. } => result == max_key(right)
+    }
+    result.is_some() => forall k in keys(tree): result.unwrap() >= k
+  decreases: size(tree)
+
+// ============================================================================
+// Insertion
+// ============================================================================
+
+spec pure fn insert[K: Ord, V](tree: BST[K, V], key: K, value: V) -> BST[K, V]
+  requires: is_bst(tree)
+  ensures:
+    is_bst(result)
+    contains(result, key)
+    get(result, key) == Some(value)
+    forall k in keys(tree): contains(result, k)
+    // Size increases by 1 if key was not present
+    not contains(tree, key) => size(result) == size(tree) + 1
+    contains(tree, key) => size(result) == size(tree)
+  decreases: size(tree)
+
+// Implementation specification
+spec pure fn insert_impl[K: Ord, V](tree: BST[K, V], key: K, value: V) -> BST[K, V]
+  ensures:
+    match tree {
+        Empty => result == Node { key: key, value: value, left: Empty, right: Empty }
+        Node { key: k, value: v, left, right } =>
+            match key.compare(k) {
+                Equal => result == Node { key: k, value: value, left: left, right: right }
+                Less => result == Node { key: k, value: v, left: insert(left, key, value), right: right }
+                Greater => result == Node { key: k, value: v, left: left, right: insert(right, key, value) }
+            }
+    }
+  decreases: size(tree)
+
+// ============================================================================
+// Deletion
+// ============================================================================
+
+spec pure fn delete[K: Ord, V](tree: BST[K, V], key: K) -> BST[K, V]
+  requires: is_bst(tree)
+  ensures:
+    is_bst(result)
+    not contains(result, key)
+    forall k in keys(tree): k != key => contains(result, k)
+    contains(tree, key) => size(result) == size(tree) - 1
+    not contains(tree, key) => size(result) == size(tree)
+  decreases: size(tree)
+
+// Helper: delete minimum and return it with the new tree
+spec pure fn delete_min[K: Ord, V](tree: BST[K, V]) -> Option[{key: K, value: V, tree: BST[K, V]}]
+  requires:
+    is_bst(tree)
+    not is_empty(tree)
+  ensures:
+    result.is_some()
+    is_bst(result.unwrap().tree)
+    result.unwrap().key == min_key(tree).unwrap()
+    size(result.unwrap().tree) == size(tree) - 1
+  decreases: size(tree)
+
+// ============================================================================
+// Traversals
+// ============================================================================
+
+spec pure fn keys[K: Ord, V](tree: BST[K, V]) -> List[K]
+  ensures:
+    result.length == size(tree)
+    forall k in result: contains(tree, k)
+  decreases: size(tree)
+
+spec pure fn inorder[K: Ord, V](tree: BST[K, V]) -> List[{key: K, value: V}]
+  requires: is_bst(tree)
+  ensures:
+    result.length == size(tree)
+    // In-order traversal produces sorted output
+    forall i, j in 0..result.length: i < j => result[i].key < result[j].key
+  decreases: size(tree)
+
+spec pure fn preorder[K: Ord, V](tree: BST[K, V]) -> List[{key: K, value: V}]
+  ensures: result.length == size(tree)
+  decreases: size(tree)
+
+spec pure fn postorder[K: Ord, V](tree: BST[K, V]) -> List[{key: K, value: V}]
+  ensures: result.length == size(tree)
+  decreases: size(tree)
+
+// ============================================================================
+// Balance Operations
+// ============================================================================
+
+spec pure fn is_balanced[K: Ord, V](tree: BST[K, V]) -> bool
+  ensures:
+    match tree {
+        Empty => result == true
+        Node { left, right, .. } =>
+            result == (
+                is_balanced(left) and
+                is_balanced(right) and
+                abs(height(left) - height(right)) <= 1
+            )
+    }
+  decreases: size(tree)
+
+spec pure fn rotate_left[K: Ord, V](tree: BST[K, V]) -> BST[K, V]
+  requires:
+    is_bst(tree)
+    match tree {
+        Node { right: Node { .. }, .. } => true
+        _ => false
+    }
+  ensures:
+    is_bst(result)
+    keys(result).is_permutation_of(keys(tree))
+
+spec pure fn rotate_right[K: Ord, V](tree: BST[K, V]) -> BST[K, V]
+  requires:
+    is_bst(tree)
+    match tree {
+        Node { left: Node { .. }, .. } => true
+        _ => false
+    }
+  ensures:
+    is_bst(result)
+    keys(result).is_permutation_of(keys(tree))
+
+// ============================================================================
+// Set Operations
+// ============================================================================
+
+spec pure fn to_set[K: Ord, V](tree: BST[K, V]) -> OrderedSet[K]
+  requires: is_bst(tree)
+  ensures:
+    result.size == size(tree)
+    forall k in keys(tree): result.contains(k)
+
+spec pure fn from_list[K: Ord, V](items: List[{key: K, value: V}]) -> BST[K, V]
+  ensures:
+    is_bst(result)
+    forall item in items: contains(result, item.key) and get(result, item.key) == Some(item.value)
+  decreases: items.length
+
+// ============================================================================
+// Axioms
+// ============================================================================
+
+axiom bst_invariant_preserved_by_insert:
+    forall tree: BST[K, V], key: K, value: V:
+        is_bst(tree) => is_bst(insert(tree, key, value))
+
+axiom bst_invariant_preserved_by_delete:
+    forall tree: BST[K, V], key: K:
+        is_bst(tree) => is_bst(delete(tree, key))
+
+axiom inorder_sorted:
+    forall tree: BST[K, V]:
+        is_bst(tree) => inorder(tree).is_sorted_by(|a, b| a.key <= b.key)
+
+axiom rotation_preserves_bst:
+    forall tree: BST[K, V]:
+        is_bst(tree) =>
+            is_bst(rotate_left(tree)) and is_bst(rotate_right(tree))
+
+// ============================================================================
+// Lemmas
+// ============================================================================
+
+lemma insert_increases_size:
+    forall tree: BST[K, V], key: K, value: V:
+        is_bst(tree) and not contains(tree, key) =>
+            size(insert(tree, key, value)) == size(tree) + 1
+
+lemma delete_decreases_size:
+    forall tree: BST[K, V], key: K:
+        is_bst(tree) and contains(tree, key) =>
+            size(delete(tree, key)) == size(tree) - 1
+
+lemma contains_after_insert:
+    forall tree: BST[K, V], key: K, value: V:
+        is_bst(tree) => contains(insert(tree, key, value), key)
+
+lemma not_contains_after_delete:
+    forall tree: BST[K, V], key: K:
+        is_bst(tree) => not contains(delete(tree, key), key)
+
+lemma inorder_length_equals_size:
+    forall tree: BST[K, V]:
+        is_bst(tree) => inorder(tree).length == size(tree)
+
+lemma min_is_first_inorder:
+    forall tree: BST[K, V]:
+        is_bst(tree) and not is_empty(tree) =>
+            inorder(tree)[0].key == min_key(tree).unwrap()
+
+lemma max_is_last_inorder:
+    forall tree: BST[K, V]:
+        is_bst(tree) and not is_empty(tree) =>
+            inorder(tree)[size(tree) - 1].key == max_key(tree).unwrap()
+
+lemma height_bounded_by_size:
+    forall tree: BST[K, V]:
+        height(tree) <= size(tree)
+
+lemma balanced_height_logarithmic:
+    forall tree: BST[K, V]:
+        is_balanced(tree) =>
+            height(tree) <= 2 * log2(size(tree) + 1)
+
+// ============================================================================
+// Inductive Proof Structure
+// ============================================================================
+
+// Proof that insert preserves BST property
+lemma insert_preserves_bst:
+    forall tree: BST[K, V], key: K, value: V:
+        is_bst(tree) => is_bst(insert(tree, key, value))
+  // Proof by structural induction on tree
+  // Base case: Empty tree
+  //   insert(Empty, k, v) = Node { k, v, Empty, Empty }
+  //   This is trivially a BST
+  // Inductive case: Node { key: k, value: v, left, right }
+  //   Case key < k:
+  //     result = Node { k, v, insert(left, key, value), right }
+  //     By IH: is_bst(insert(left, key, value))
+  //     key < k and all_keys_less_than(insert(left, key, value), k) by transitivity
+  //     Therefore is_bst(result)
+  //   Case key > k: symmetric
+  //   Case key == k: tree unchanged, still BST
+
+lemma delete_preserves_bst:
+    forall tree: BST[K, V], key: K:
+        is_bst(tree) => is_bst(delete(tree, key))
+  // Similar inductive proof structure
