@@ -107,15 +107,15 @@ Calculate and report trust scores combining verification, confidence, and proven
 
 Interface for AI-powered implementation generation.
 
-- [ ] Define generation request format (spec + target language + model)
-- [ ] Define generation response format (code + confidence + provenance)
-- [ ] Implement target language selection (Klar vs Kira)
-- [ ] Implement generation context preparation (spec + related types + examples)
-- [ ] Implement generated code parsing and AST integration
-- [ ] Implement automatic annotation insertion (@author, @confidence, etc.)
-- [ ] Implement typed hole generation (???) for partial implementations
-- [ ] Implement checkpoint serialization for resumable generation
-- [ ] Create stub/mock generator for testing without AI
+- [x] Define generation request format (spec + target language + model)
+- [x] Define generation response format (code + confidence + provenance)
+- [x] Implement target language selection (Klar vs Kira)
+- [x] Implement generation context preparation (spec + related types + examples)
+- [x] Implement generated code parsing and AST integration
+- [x] Implement automatic annotation insertion (@author, @confidence, etc.)
+- [x] Implement typed hole generation (???) for partial implementations
+- [x] Implement checkpoint serialization for resumable generation
+- [x] Create stub/mock generator for testing without AI
 
 ## Phase 8: CLI Implementation
 

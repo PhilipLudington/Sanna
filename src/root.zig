@@ -12,6 +12,7 @@ pub const specs = @import("specs/root.zig");
 pub const verify = @import("verify/root.zig");
 pub const provenance = @import("provenance/root.zig");
 pub const trust = @import("trust/root.zig");
+pub const codegen = @import("codegen/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -63,6 +64,15 @@ pub const TrustReportGenerator = trust.TrustReportGenerator;
 pub const TrustReport = trust.Report;
 pub const CriticalityLevel = trust.CriticalityLevel;
 
+// Re-export commonly used types from code generation
+pub const GenerationRequest = codegen.GenerationRequest;
+pub const GenerationResponse = codegen.GenerationResponse;
+pub const GeneratedCode = codegen.GeneratedCode;
+pub const TargetLanguage = codegen.TargetLanguage;
+pub const MockGenerator = codegen.MockGenerator;
+pub const GenerationPipeline = codegen.GenerationPipeline;
+pub const CheckpointManager = codegen.CheckpointManager;
+
 test {
     _ = lexer;
     _ = parser;
@@ -71,4 +81,5 @@ test {
     _ = verify;
     _ = provenance;
     _ = trust;
+    _ = codegen;
 }
