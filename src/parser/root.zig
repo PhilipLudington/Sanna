@@ -6,6 +6,7 @@ const std = @import("std");
 
 pub const Ast = @import("Ast.zig");
 pub const Parser = @import("Parser.zig");
+pub const pretty_print = @import("pretty_print.zig");
 
 // Re-export commonly used types
 pub const Module = Ast.Module;
@@ -27,8 +28,17 @@ pub const Visibility = Ast.Visibility;
 // Re-export parser types
 pub const ParseError = Parser.ParseError;
 pub const Diagnostic = Parser.Diagnostic;
+pub const ParseContext = Parser.ParseContext;
+pub const FormattedDiagnostic = Parser.FormattedDiagnostic;
+
+// Re-export pretty printer
+pub const PrettyPrinter = pretty_print.PrettyPrinter;
+pub const PrintOptions = pretty_print.PrintOptions;
+pub const printModule = pretty_print.printModule;
+pub const debugPrintModule = pretty_print.debugPrintModule;
 
 test {
     _ = Ast;
     _ = Parser;
+    _ = pretty_print;
 }

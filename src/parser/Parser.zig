@@ -55,12 +55,78 @@ pub const Diagnostic = struct {
     message: []const u8,
     span: Span,
     severity: Severity,
+    context: ?[]const u8,
 
     pub const Severity = enum {
         err,
         warning,
         hint,
     };
+
+    pub fn format(self: Diagnostic) FormattedDiagnostic {
+        return .{ .diagnostic = self };
+    }
+};
+
+/// Helper for formatted diagnostic output
+pub const FormattedDiagnostic = struct {
+    diagnostic: Diagnostic,
+
+    pub fn print(self: FormattedDiagnostic, writer: anytype) !void {
+        const d = self.diagnostic;
+        const severity_str = switch (d.severity) {
+            .err => "error",
+            .warning => "warning",
+            .hint => "hint",
+        };
+        try writer.print("{d}:{d}: {s}: {s}", .{
+            d.span.start.line,
+            d.span.start.column,
+            severity_str,
+            d.message,
+        });
+        if (d.context) |ctx| {
+            try writer.print(" (while parsing {s})", .{ctx});
+        }
+        try writer.writeByte('\n');
+    }
+};
+
+/// Context for tracking what we're currently parsing (for better error messages)
+pub const ParseContext = enum {
+    module,
+    import_decl,
+    declaration,
+    type_definition,
+    type_body,
+    function_spec,
+    interface_spec,
+    invariant,
+    axiom,
+    lemma,
+    expression,
+    attribute,
+    type_parameters,
+    parameters,
+
+    pub fn name(self: ParseContext) []const u8 {
+        return switch (self) {
+            .module => "module",
+            .import_decl => "import declaration",
+            .declaration => "declaration",
+            .type_definition => "type definition",
+            .type_body => "type body",
+            .function_spec => "function specification",
+            .interface_spec => "interface specification",
+            .invariant => "invariant",
+            .axiom => "axiom",
+            .lemma => "lemma",
+            .expression => "expression",
+            .attribute => "attribute",
+            .type_parameters => "type parameters",
+            .parameters => "parameters",
+        };
+    }
 };
 
 // ============================================================================
@@ -71,6 +137,8 @@ allocator: Allocator,
 tokens: []const Token,
 current: usize,
 diagnostics: std.ArrayListUnmanaged(Diagnostic),
+context_stack: std.ArrayListUnmanaged(ParseContext),
+panic_mode: bool,
 
 // ============================================================================
 // Initialization
@@ -82,11 +150,14 @@ pub fn init(allocator: Allocator, tokens: []const Token) Parser {
         .tokens = tokens,
         .current = 0,
         .diagnostics = .{},
+        .context_stack = .{},
+        .panic_mode = false,
     };
 }
 
 pub fn deinit(self: *Parser) void {
     self.diagnostics.deinit(self.allocator);
+    self.context_stack.deinit(self.allocator);
 }
 
 // ============================================================================
@@ -150,15 +221,50 @@ fn previous(self: *const Parser) Token {
 }
 
 // ============================================================================
+// Context Management
+// ============================================================================
+
+fn pushContext(self: *Parser, ctx: ParseContext) !void {
+    try self.context_stack.append(self.allocator, ctx);
+}
+
+fn popContext(self: *Parser) void {
+    if (self.context_stack.items.len > 0) {
+        _ = self.context_stack.pop();
+    }
+}
+
+fn currentContext(self: *const Parser) ?ParseContext {
+    if (self.context_stack.items.len == 0) return null;
+    return self.context_stack.items[self.context_stack.items.len - 1];
+}
+
+fn currentContextName(self: *const Parser) ?[]const u8 {
+    if (self.currentContext()) |ctx| {
+        return ctx.name();
+    }
+    return null;
+}
+
+// ============================================================================
 // Diagnostics
 // ============================================================================
 
 fn addDiagnostic(self: *Parser, message: []const u8, span: Span, severity: Diagnostic.Severity) !void {
+    // In panic mode, suppress cascading errors
+    if (self.panic_mode and severity == .err) return;
+
     try self.diagnostics.append(self.allocator, .{
         .message = message,
         .span = span,
         .severity = severity,
+        .context = self.currentContextName(),
     });
+
+    // Enter panic mode on first error
+    if (severity == .err) {
+        self.panic_mode = true;
+    }
 }
 
 pub fn hasErrors(self: *const Parser) bool {
@@ -168,39 +274,165 @@ pub fn hasErrors(self: *const Parser) bool {
     return false;
 }
 
+pub fn errorCount(self: *const Parser) usize {
+    var count: usize = 0;
+    for (self.diagnostics.items) |d| {
+        if (d.severity == .err) count += 1;
+    }
+    return count;
+}
+
+// ============================================================================
+// Error Recovery
+// ============================================================================
+
+/// Token types that can start a new top-level declaration
+fn isDeclarationStart(token_type: TokenType) bool {
+    return switch (token_type) {
+        .kw_type, .kw_spec, .kw_model, .kw_interface, .kw_invariant, .kw_axiom, .kw_lemma, .kw_pub, .op_at, .doc_comment => true,
+        else => false,
+    };
+}
+
+/// Synchronize parser state after an error - skip to next declaration boundary
+fn synchronize(self: *Parser) void {
+    self.panic_mode = false;
+
+    while (!self.isAtEnd()) {
+        // If we just passed a declaration-ending point, we're synchronized
+        // (Sanna doesn't use semicolons, so we rely on keyword detection)
+
+        // If current token starts a new declaration, we're synchronized
+        if (isDeclarationStart(self.peek().type)) {
+            return;
+        }
+
+        // Skip past import keyword for import recovery
+        if (self.peek().type == .kw_import) {
+            return;
+        }
+
+        _ = self.advance();
+    }
+}
+
+/// Synchronize to closing brace, useful for recovering from type body errors
+fn synchronizeToBrace(self: *Parser) void {
+    self.panic_mode = false;
+    var brace_depth: i32 = 1;
+
+    while (!self.isAtEnd()) {
+        switch (self.peek().type) {
+            .lbrace => brace_depth += 1,
+            .rbrace => {
+                brace_depth -= 1;
+                if (brace_depth == 0) {
+                    _ = self.advance(); // consume the closing brace
+                    return;
+                }
+            },
+            else => {},
+        }
+        _ = self.advance();
+    }
+}
+
+/// Synchronize to closing bracket, useful for recovering from type parameter errors
+fn synchronizeToBracket(self: *Parser) void {
+    self.panic_mode = false;
+    var bracket_depth: i32 = 1;
+
+    while (!self.isAtEnd()) {
+        switch (self.peek().type) {
+            .lbracket => bracket_depth += 1,
+            .rbracket => {
+                bracket_depth -= 1;
+                if (bracket_depth == 0) {
+                    _ = self.advance(); // consume the closing bracket
+                    return;
+                }
+            },
+            else => {},
+        }
+        _ = self.advance();
+    }
+}
+
+/// Synchronize to closing parenthesis
+fn synchronizeToParen(self: *Parser) void {
+    self.panic_mode = false;
+    var paren_depth: i32 = 1;
+
+    while (!self.isAtEnd()) {
+        switch (self.peek().type) {
+            .lparen => paren_depth += 1,
+            .rparen => {
+                paren_depth -= 1;
+                if (paren_depth == 0) {
+                    _ = self.advance(); // consume the closing paren
+                    return;
+                }
+            },
+            else => {},
+        }
+        _ = self.advance();
+    }
+}
+
 // ============================================================================
 // Module Parsing
 // ============================================================================
 
-/// Parse a complete module
+/// Parse a complete module with error recovery
 pub fn parseModule(self: *Parser) ParseError!Module {
+    try self.pushContext(.module);
+    defer self.popContext();
+
     const start_loc = self.peek().span.start;
 
     // Parse optional module declaration
     var module_name: ?QualifiedName = null;
     if (self.check(.kw_module)) {
-        module_name = try self.parseModuleDecl();
+        module_name = self.parseModuleDecl() catch |err| blk: {
+            if (err == error.OutOfMemory) return err;
+            self.synchronize();
+            break :blk null;
+        };
     }
 
-    // Parse imports
+    // Parse imports with error recovery
     var imports = std.ArrayListUnmanaged(Import){};
     errdefer imports.deinit(self.allocator);
 
     while (self.check(.kw_import)) {
-        const import_decl = try self.parseImport();
-        try imports.append(self.allocator, import_decl);
+        if (self.parseImport()) |import_decl| {
+            try imports.append(self.allocator, import_decl);
+        } else |err| {
+            if (err == error.OutOfMemory) return err;
+            // Skip to next import or declaration
+            self.synchronize();
+        }
     }
 
-    // Parse declarations
+    // Parse declarations with error recovery
     var declarations = std.ArrayListUnmanaged(Declaration){};
     errdefer declarations.deinit(self.allocator);
 
     while (!self.isAtEnd()) {
-        const decl = try self.parseDeclaration();
-        try declarations.append(self.allocator, decl);
+        if (self.parseDeclaration()) |decl| {
+            try declarations.append(self.allocator, decl);
+        } else |err| {
+            if (err == error.OutOfMemory) return err;
+            // Skip to next declaration
+            self.synchronize();
+            // If we're still stuck on non-declaration token, skip it
+            if (!self.isAtEnd() and !isDeclarationStart(self.peek().type)) {
+                _ = self.advance();
+            }
+        }
     }
 
-    const end_loc = self.previous().span.end;
+    const end_loc = if (self.current > 0) self.previous().span.end else start_loc;
 
     return Module.init(
         module_name,
@@ -225,6 +457,9 @@ fn parseModuleDecl(self: *Parser) ParseError!QualifiedName {
 /// import path.to.module as alias
 /// import path.to.module { Item1, Item2 as Alias2 }
 fn parseImport(self: *Parser) ParseError!Import {
+    try self.pushContext(.import_decl);
+    defer self.popContext();
+
     const start = self.peek().span.start;
     _ = try self.expect(.kw_import, "Expected 'import'");
 
@@ -286,6 +521,9 @@ fn parseImportItem(self: *Parser) ParseError!ImportItem {
 
 /// Parse a top-level declaration
 fn parseDeclaration(self: *Parser) ParseError!Declaration {
+    try self.pushContext(.declaration);
+    defer self.popContext();
+
     const start = self.peek().span.start;
 
     // Parse doc comment if present
@@ -347,6 +585,9 @@ fn parseDeclarationKind(self: *Parser) ParseError!DeclarationKind {
 
 /// Parse an attribute: @name or @name(args)
 fn parseAttribute(self: *Parser) ParseError!Attribute {
+    try self.pushContext(.attribute);
+    defer self.popContext();
+
     const start = self.peek().span.start;
     _ = try self.expect(.op_at, "Expected '@'");
 
@@ -445,6 +686,9 @@ fn parseAttributeValue(self: *Parser) ParseError!AttributeValue {
 
 /// Parse a type definition
 fn parseTypeDefinition(self: *Parser) ParseError!TypeDefinition {
+    try self.pushContext(.type_definition);
+    defer self.popContext();
+
     const start = self.peek().span.start;
     _ = try self.expect(.kw_type, "Expected 'type'");
 
@@ -486,6 +730,9 @@ fn parseTypeParameters(self: *Parser) ParseError![]const TypeParameter {
     if (!self.match(.lbracket)) {
         return &.{};
     }
+
+    try self.pushContext(.type_parameters);
+    defer self.popContext();
 
     var params = std.ArrayListUnmanaged(TypeParameter){};
     errdefer params.deinit(self.allocator);
@@ -635,6 +882,9 @@ fn parseModelDefinition(self: *Parser) ParseError!ModelDefinition {
 
 /// Parse a function specification (placeholder - will be expanded)
 fn parseFunctionSpec(self: *Parser) ParseError!FunctionSpec {
+    try self.pushContext(.function_spec);
+    defer self.popContext();
+
     const start = self.peek().span.start;
     _ = try self.expect(.kw_spec, "Expected 'spec'");
 
@@ -705,6 +955,9 @@ fn parseFunctionSpec(self: *Parser) ParseError!FunctionSpec {
 
 /// Parse function parameters
 fn parseParameters(self: *Parser) ParseError![]const Parameter {
+    try self.pushContext(.parameters);
+    defer self.popContext();
+
     var params = std.ArrayListUnmanaged(Parameter){};
     errdefer params.deinit(self.allocator);
 
@@ -996,6 +1249,9 @@ fn parseGenericType(self: *Parser, base: QualifiedName, start: Location) ParseEr
 
 /// Parse an expression (simplified for initial implementation)
 fn parseExpression(self: *Parser) ParseError!Expression {
+    try self.pushContext(.expression);
+    defer self.popContext();
+
     return self.parseLogicalOr();
 }
 
@@ -1989,4 +2245,124 @@ test "parser if expression" {
 
     _ = try parser.parseModule();
     try testing.expect(!parser.hasErrors());
+}
+
+// ============================================================================
+// Error Recovery Tests
+// ============================================================================
+
+test "error recovery: multiple declarations with error in first" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // First declaration has error (missing '=' after type name)
+    // Second declaration is valid
+    const source =
+        \\type Broken string
+        \\type Valid = i32
+    ;
+
+    var lex = Lexer.init(alloc, source);
+    const tokens = try lex.tokenize();
+    var parser = Parser.init(alloc, tokens.items);
+
+    const mod = try parser.parseModule();
+
+    // Should have errors but still parse the second declaration
+    try testing.expect(parser.hasErrors());
+    // The valid declaration should be parsed
+    try testing.expectEqual(@as(usize, 1), mod.declarations.len);
+    try testing.expectEqualStrings("Valid", mod.declarations[0].kind.type_def.name.name);
+}
+
+test "error recovery: continues after malformed import" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // First import is malformed (missing path after 'import')
+    // Type definition should still be parsed
+    const source =
+        \\import
+        \\type Valid = i32
+    ;
+
+    var lex = Lexer.init(alloc, source);
+    const tokens = try lex.tokenize();
+    var parser = Parser.init(alloc, tokens.items);
+
+    const mod = try parser.parseModule();
+
+    // Should have errors but continue parsing
+    try testing.expect(parser.hasErrors());
+    // The type definition should be parsed
+    try testing.expectEqual(@as(usize, 1), mod.declarations.len);
+}
+
+test "error context is included in diagnostics" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // Invalid type definition (missing identifier after 'type')
+    const source = "type = i32";
+
+    var lex = Lexer.init(alloc, source);
+    const tokens = try lex.tokenize();
+    var parser = Parser.init(alloc, tokens.items);
+
+    _ = try parser.parseModule();
+
+    try testing.expect(parser.hasErrors());
+    try testing.expect(parser.diagnostics.items.len > 0);
+
+    // First diagnostic should have context about type definition
+    const first_diag = parser.diagnostics.items[0];
+    try testing.expect(first_diag.context != null);
+    try testing.expectEqualStrings("type definition", first_diag.context.?);
+}
+
+test "diagnostic has location information" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // Error on line 2
+    const source =
+        \\type A = i32
+        \\type = i32
+    ;
+
+    var lex = Lexer.init(alloc, source);
+    const tokens = try lex.tokenize();
+    var parser = Parser.init(alloc, tokens.items);
+
+    _ = try parser.parseModule();
+
+    try testing.expect(parser.hasErrors());
+    try testing.expect(parser.diagnostics.items.len > 0);
+
+    // Diagnostic should be on line 2
+    const diag = parser.diagnostics.items[0];
+    try testing.expectEqual(@as(u32, 2), diag.span.start.line);
+}
+
+test "errorCount returns correct count" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var lex = Lexer.init(alloc, "type A = i32");
+    const tokens = try lex.tokenize();
+    var parser = Parser.init(alloc, tokens.items);
+
+    _ = try parser.parseModule();
+
+    try testing.expectEqual(@as(usize, 0), parser.errorCount());
 }

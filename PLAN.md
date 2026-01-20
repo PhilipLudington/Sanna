@@ -17,8 +17,8 @@ Foundation components for parsing and representing Sanna specifications.
 - [x] Implement parser for type definitions with invariants
 - [x] Implement parser for function specifications (requires/ensures/modifies)
 - [x] Implement parser for expressions including old(), result, and quantifiers
-- [ ] Implement error recovery and source location tracking
-- [ ] Create pretty-printer for AST debugging
+- [x] Implement error recovery and source location tracking
+- [x] Create pretty-printer for AST debugging
 
 ## Phase 2: Type System
 
