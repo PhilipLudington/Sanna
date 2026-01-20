@@ -189,6 +189,10 @@ fn printHelp(cli: *Cli) void {
         \\    -h, --help     Print help information
         \\    --json         Output results as JSON
         \\
+        \\EXIT CODES:
+        \\    0    All checks passed
+        \\    1    Syntax or type errors found
+        \\
         \\EXAMPLES:
         \\    sanna check                      # Check all files in specs/
         \\    sanna check specs/auth.sanna     # Check specific file

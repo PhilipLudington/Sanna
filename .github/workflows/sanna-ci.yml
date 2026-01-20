@@ -1,0 +1,198 @@
+# Sanna CI/CD Workflow
+#
+# This workflow verifies Sanna specifications and enforces trust thresholds.
+#
+# Exit codes:
+#   - sanna check:  0=pass, 1=syntax/type errors
+#   - sanna verify: 0=all proven, 1=unproven, 2=failures
+#   - sanna trust:  0=pass, 1=error, 2=trust below threshold
+#
+# For more information, see: docs/ci-cd-setup.md
+
+name: Sanna CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - '**.sanna'
+      - 'specs/**'
+      - 'src/**'
+      - 'build.zig'
+      - '.github/workflows/sanna-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '**.sanna'
+      - 'specs/**'
+      - 'src/**'
+      - 'build.zig'
+
+env:
+  # Trust threshold for deployment gate (0.0-1.0)
+  TRUST_THRESHOLD: 0.5
+  # Verification timeout per obligation (seconds)
+  VERIFY_TIMEOUT: 60
+
+jobs:
+  # Build the Sanna tool
+  build:
+    name: Build Sanna
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.0
+
+      - name: Build Sanna
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Upload Sanna binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanna-binary
+          path: zig-out/bin/sanna
+          retention-days: 1
+
+  # Check specification syntax and types
+  check:
+    name: Check Specifications
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Sanna binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sanna-binary
+          path: ./bin
+
+      - name: Make binary executable
+        run: chmod +x ./bin/sanna
+
+      - name: Check specifications
+        run: ./bin/sanna check --json > check-report.json
+
+      - name: Upload check report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: check-report
+          path: check-report.json
+          retention-days: 30
+
+  # Verify specifications (full verification on main, incremental on PRs)
+  verify:
+    name: Verify Specifications
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for incremental verification
+
+      - name: Download Sanna binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sanna-binary
+          path: ./bin
+
+      - name: Make binary executable
+        run: chmod +x ./bin/sanna
+
+      - name: Install Z3 solver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y z3
+
+      - name: Verify specifications (PR - changed only)
+        if: github.event_name == 'pull_request'
+        run: |
+          ./bin/sanna verify \
+            --changed \
+            --base origin/${{ github.base_ref }} \
+            --timeout ${{ env.VERIFY_TIMEOUT }} \
+            --json > verification-report.json
+
+      - name: Verify specifications (push - full)
+        if: github.event_name == 'push'
+        run: |
+          ./bin/sanna verify \
+            --timeout ${{ env.VERIFY_TIMEOUT }} \
+            --json > verification-report.json
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-report
+          path: verification-report.json
+          retention-days: 30
+
+  # Generate trust report and enforce deployment threshold
+  trust:
+    name: Trust Gate
+    runs-on: ubuntu-latest
+    needs: [check, verify]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Sanna binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sanna-binary
+          path: ./bin
+
+      - name: Make binary executable
+        run: chmod +x ./bin/sanna
+
+      - name: Generate trust report
+        run: |
+          ./bin/sanna trust \
+            --output trust-report.json \
+            --fail-below ${{ env.TRUST_THRESHOLD }}
+
+      - name: Upload trust report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trust-report
+          path: trust-report.json
+          retention-days: 30
+
+      - name: Check deployment readiness
+        run: |
+          echo "## Trust Report Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f trust-report.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat trust-report.json | jq '.summary' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Summary job - required status check
+  ci-complete:
+    name: CI Complete
+    runs-on: ubuntu-latest
+    needs: [check, verify, trust]
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ needs.check.result }}" != "success" ]]; then
+            echo "Check job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.verify.result }}" != "success" ]]; then
+            echo "Verify job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.trust.result }}" != "success" ]]; then
+            echo "Trust gate failed"
+            exit 1
+          fi
+          echo "All CI checks passed!"

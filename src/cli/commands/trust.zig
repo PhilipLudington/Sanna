@@ -131,7 +131,7 @@ pub fn run(cli: *Cli, args: *Args) u8 {
         for (filtered_entries.items) |entry| {
             if (entry.score < threshold) {
                 cli.output.err("Trust score below deployment threshold ({d:.2})", .{threshold});
-                return 1;
+                return 2; // Exit code 2 = trust below threshold (CI gate failure)
             }
         }
     }
@@ -318,6 +318,24 @@ fn outputJsonReport(cli: *Cli, entries: []const TrustEntry) void {
     _ = cli;
     const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 
+    // Calculate summary statistics
+    var needs_review_count: usize = 0;
+    var blocked_count: usize = 0;
+    var min_score: f32 = 1.0;
+    var max_score: f32 = 0.0;
+    var total_score: f32 = 0.0;
+
+    for (entries) |entry| {
+        if (entry.needs_review) needs_review_count += 1;
+        if (entry.score < 0.3) blocked_count += 1;
+        if (entry.score < min_score) min_score = entry.score;
+        if (entry.score > max_score) max_score = entry.score;
+        total_score += entry.score;
+    }
+
+    const avg_score: f32 = if (entries.len > 0) total_score / @as(f32, @floatFromInt(entries.len)) else 0.0;
+    const can_deploy = blocked_count == 0;
+
     stdout_file.writeAll("{\n  \"entries\": [\n") catch {};
 
     for (entries, 0..) |entry, i| {
@@ -343,15 +361,52 @@ fn outputJsonReport(cli: *Cli, entries: []const TrustEntry) void {
     }
 
     stdout_file.writeAll("\n  ],\n  \"summary\": {\n") catch {};
-    var total_buf: [64]u8 = undefined;
-    const total_str = std.fmt.bufPrint(&total_buf, "    \"total\": {d}\n", .{entries.len}) catch "    \"total\": 0\n";
-    stdout_file.writeAll(total_str) catch {};
+
+    var summary_buf: [256]u8 = undefined;
+    const summary_str = std.fmt.bufPrint(&summary_buf,
+        \\    "total": {d},
+        \\    "needs_review": {d},
+        \\    "blocked": {d},
+        \\    "average_score": {d:.4},
+        \\    "min_score": {d:.4},
+        \\    "max_score": {d:.4},
+        \\    "can_deploy": {s}
+        \\
+    , .{
+        entries.len,
+        needs_review_count,
+        blocked_count,
+        avg_score,
+        min_score,
+        max_score,
+        if (can_deploy) "true" else "false",
+    }) catch "    \"total\": 0\n";
+    stdout_file.writeAll(summary_str) catch {};
     stdout_file.writeAll("  }\n}\n") catch {};
 }
 
 fn writeJsonReport(cli: *Cli, path: []const u8, entries: []const TrustEntry) !void {
+    _ = cli;
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
+
+    // Calculate summary statistics
+    var needs_review_count: usize = 0;
+    var blocked_count: usize = 0;
+    var min_score: f32 = 1.0;
+    var max_score: f32 = 0.0;
+    var total_score: f32 = 0.0;
+
+    for (entries) |entry| {
+        if (entry.needs_review) needs_review_count += 1;
+        if (entry.score < 0.3) blocked_count += 1;
+        if (entry.score < min_score) min_score = entry.score;
+        if (entry.score > max_score) max_score = entry.score;
+        total_score += entry.score;
+    }
+
+    const avg_score: f32 = if (entries.len > 0) total_score / @as(f32, @floatFromInt(entries.len)) else 0.0;
+    const can_deploy = blocked_count == 0;
 
     try file.writeAll("{\n  \"entries\": [\n");
 
@@ -379,12 +434,27 @@ fn writeJsonReport(cli: *Cli, path: []const u8, entries: []const TrustEntry) !vo
 
     try file.writeAll("\n  ],\n  \"summary\": {\n");
 
-    var buf: [64]u8 = undefined;
-    const total = std.fmt.bufPrint(&buf, "    \"total\": {d}\n", .{entries.len}) catch return error.BufferOverflow;
-    try file.writeAll(total);
+    var summary_buf: [256]u8 = undefined;
+    const summary_str = std.fmt.bufPrint(&summary_buf,
+        \\    "total": {d},
+        \\    "needs_review": {d},
+        \\    "blocked": {d},
+        \\    "average_score": {d:.4},
+        \\    "min_score": {d:.4},
+        \\    "max_score": {d:.4},
+        \\    "can_deploy": {s}
+        \\
+    , .{
+        entries.len,
+        needs_review_count,
+        blocked_count,
+        avg_score,
+        min_score,
+        max_score,
+        if (can_deploy) "true" else "false",
+    }) catch return error.BufferOverflow;
+    try file.writeAll(summary_str);
     try file.writeAll("  }\n}\n");
-
-    _ = cli;
 }
 
 fn collectSpecFiles(allocator: Allocator, base_path: []const u8, files: *std.ArrayListUnmanaged([]const u8)) !void {
@@ -430,6 +500,11 @@ fn printHelp(cli: *Cli) void {
         \\    - Author provenance (human/AI)
         \\    - Code age (decay over time)
         \\    - Criticality flags (security-sensitive, etc.)
+        \\
+        \\EXIT CODES:
+        \\    0    Success
+        \\    1    Error (invalid arguments, file not found, etc.)
+        \\    2    Trust below threshold (--fail-below gate failed)
         \\
         \\EXAMPLES:
         \\    sanna trust                         # Show all trust scores

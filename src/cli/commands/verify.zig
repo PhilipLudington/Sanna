@@ -32,6 +32,8 @@ pub fn run(cli: *Cli, args: *Args) u8 {
     const obligations_filter = args.getFlagValue(null, "obligations");
     const parallel = !args.hasFlag(null, "no-parallel");
     const show_proofs = args.hasFlag(null, "show-proofs");
+    const changed_only = args.hasFlag(null, "changed");
+    const base_branch = args.getFlagValue(null, "base") orelse "main";
 
     // Collect files to verify
     var files = std.ArrayListUnmanaged([]const u8){};
@@ -51,12 +53,22 @@ pub fn run(cli: *Cli, args: *Args) u8 {
         };
     }
 
-    // If no files specified, verify all .sanna files in specs/
+    // If no files specified, verify .sanna files
     if (files.items.len == 0) {
-        collectSpecFiles(cli.allocator, cli.cwd, &files) catch |err| {
-            cli.output.err("Failed to find spec files: {}", .{err});
-            return 1;
-        };
+        if (changed_only) {
+            // Only verify changed spec files (for PR checks)
+            collectChangedSpecFiles(cli.allocator, cli.cwd, base_branch, &files) catch |err| {
+                cli.output.err("Failed to get changed files: {}", .{err});
+                cli.output.info("Tip: Ensure you're in a git repository and the base branch exists", .{});
+                return 1;
+            };
+        } else {
+            // Verify all spec files
+            collectSpecFiles(cli.allocator, cli.cwd, &files) catch |err| {
+                cli.output.err("Failed to find spec files: {}", .{err});
+                return 1;
+            };
+        }
     }
 
     if (files.items.len == 0) {
@@ -250,6 +262,59 @@ fn collectSpecFiles(allocator: Allocator, base_path: []const u8, files: *std.Arr
     }
 }
 
+/// Collect only .sanna files that have changed compared to the base branch.
+/// Uses git diff to find changed files, useful for incremental PR verification.
+fn collectChangedSpecFiles(allocator: Allocator, base_path: []const u8, base_branch: []const u8, files: *std.ArrayListUnmanaged([]const u8)) !void {
+    // Build git diff command to get changed .sanna files
+    // git diff --name-only --diff-filter=ACMR <base>...HEAD -- '*.sanna'
+    var child = std.process.Child.init(&.{
+        "git",
+        "diff",
+        "--name-only",
+        "--diff-filter=ACMR", // Added, Copied, Modified, Renamed
+        base_branch,
+        "--",
+        "*.sanna",
+    }, allocator);
+    // cwd defaults to current directory
+
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+
+    try child.spawn();
+
+    const stdout = child.stdout orelse return error.NoStdout;
+    const output = try stdout.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    defer allocator.free(output);
+
+    const term = try child.wait();
+    switch (term) {
+        .Exited => |code| if (code != 0) return error.GitCommandFailed,
+        else => return error.GitCommandFailed,
+    }
+
+    // Parse output line by line
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        // Git returns paths relative to repo root
+        // If base_path is different, we might need to adjust
+        // For now, assume we're running from repo root
+        const full_path = try std.fs.path.join(allocator, &.{ base_path, trimmed });
+        errdefer allocator.free(full_path);
+
+        // Verify file still exists (might have been deleted)
+        std.fs.cwd().access(full_path, .{}) catch {
+            allocator.free(full_path);
+            continue;
+        };
+
+        try files.append(allocator, full_path);
+    }
+}
+
 /// Extract name from a declaration
 fn getDeclName(decl: root.parser.Ast.Declaration) ?[]const u8 {
     return switch (decl.kind) {
@@ -278,6 +343,8 @@ fn printHelp(cli: *Cli) void {
         \\    --obligations <FILTER>   Filter obligations (e.g., "precondition")
         \\    --no-parallel            Disable parallel verification
         \\    --show-proofs            Show proof details for successful verifications
+        \\    --changed                Only verify specs changed since base branch (CI mode)
+        \\    --base <BRANCH>          Base branch for --changed comparison (default: main)
         \\    --json                   Output as JSON
         \\    -h, --help               Print help information
         \\
@@ -291,6 +358,8 @@ fn printHelp(cli: *Cli) void {
         \\    sanna verify --timeout 60 specs/critical.sanna
         \\    sanna verify --obligations precondition
         \\    sanna verify --json > verification-report.json
+        \\    sanna verify --changed                    # CI: verify changed specs only
+        \\    sanna verify --changed --base develop     # Compare against develop branch
         \\
     ;
     cli.output.print("{s}", .{help});

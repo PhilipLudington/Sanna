@@ -168,12 +168,12 @@ Language Server Protocol support for IDE features.
 
 Continuous integration support and deployment gates.
 
-- [ ] Create GitHub Actions workflow template
-- [ ] Implement exit codes for CI (0 = pass, 1 = verification failed, 2 = trust below threshold)
-- [ ] Implement --fail-below flag for trust gate
-- [ ] Implement trust report artifact generation
-- [ ] Create documentation for CI/CD setup
-- [ ] Implement incremental verification for PR checks (only verify changed specs)
+- [x] Create GitHub Actions workflow template
+- [x] Implement exit codes for CI (0 = pass, 1 = verification failed, 2 = trust below threshold)
+- [x] Implement --fail-below flag for trust gate
+- [x] Implement trust report artifact generation
+- [x] Create documentation for CI/CD setup
+- [x] Implement incremental verification for PR checks (only verify changed specs)
 
 ## Architecture Notes
 
