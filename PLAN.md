@@ -57,21 +57,21 @@ Semantic analysis and interpretation of specifications.
 
 SMT-based verification and proof obligation management.
 
-- [ ] Define proof obligation data structures
-- [ ] Implement proof obligation generation from function specs
-- [ ] Implement proof obligation generation from type invariants
-- [ ] Implement proof obligation generation from axioms and lemmas
-- [ ] Create SMT-LIB encoding for Sanna types
-- [ ] Create SMT-LIB encoding for Sanna expressions
-- [ ] Create SMT-LIB encoding for quantifiers (forall, exists)
-- [ ] Integrate Z3 solver (via subprocess or bindings)
-- [ ] Implement verification result handling (proven, unproven, timeout, unknown)
-- [ ] Implement verification hints (@hint) processing
-- [ ] Implement trusted block (@trusted) handling with reason tracking
-- [ ] Implement admitted obligations tracking
-- [ ] Implement parallel verification of independent obligations
-- [ ] Implement verification caching (proofs/.sanna-cache/)
-- [ ] Implement incremental verification for partial implementations
+- [x] Define proof obligation data structures
+- [x] Implement proof obligation generation from function specs
+- [x] Implement proof obligation generation from type invariants
+- [x] Implement proof obligation generation from axioms and lemmas
+- [x] Create SMT-LIB encoding for Sanna types
+- [x] Create SMT-LIB encoding for Sanna expressions
+- [x] Create SMT-LIB encoding for quantifiers (forall, exists)
+- [x] Integrate Z3 solver (via subprocess or bindings)
+- [x] Implement verification result handling (proven, unproven, timeout, unknown)
+- [x] Implement verification hints (@hint) processing
+- [x] Implement trusted block (@trusted) handling with reason tracking
+- [x] Implement admitted obligations tracking
+- [x] Implement parallel verification of independent obligations
+- [x] Implement verification caching (proofs/.sanna-cache/)
+- [x] Implement incremental verification for partial implementations
 
 ## Phase 5: Provenance and Confidence System
 

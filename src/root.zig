@@ -9,6 +9,7 @@ pub const lexer = @import("lexer/root.zig");
 pub const parser = @import("parser/root.zig");
 pub const types = @import("types/root.zig");
 pub const specs = @import("specs/root.zig");
+pub const verify = @import("verify/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -36,9 +37,16 @@ pub const ImportResolver = specs.ImportResolver;
 pub const SemanticAnalyzer = specs.SemanticAnalyzer;
 pub const SpecBinding = specs.SpecBinding;
 
+// Re-export commonly used types from verification engine
+pub const VerificationEngine = verify.VerificationEngine;
+pub const VerificationReport = verify.VerificationReport;
+pub const VerificationStatus = verify.VerificationStatus;
+pub const Z3Solver = verify.Z3Solver;
+
 test {
     _ = lexer;
     _ = parser;
     _ = types;
     _ = specs;
+    _ = verify;
 }

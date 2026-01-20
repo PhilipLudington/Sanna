@@ -42,6 +42,10 @@ pub const SemanticError = @import("SemanticAnalyzer.zig").SemanticError;
 // Specification binding
 pub const SpecBinding = @import("SpecBinding.zig").SpecBinding;
 pub const BoundSpec = @import("SpecBinding.zig").BoundSpec;
+pub const BoundInvariant = @import("SpecBinding.zig").BoundInvariant;
+pub const BoundAxiom = @import("SpecBinding.zig").BoundAxiom;
+pub const BoundLemma = @import("SpecBinding.zig").BoundLemma;
+pub const VerificationStatus = @import("SpecBinding.zig").VerificationStatus;
 
 // Tests
 test {
