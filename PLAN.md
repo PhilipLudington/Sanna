@@ -129,7 +129,7 @@ Command-line interface for all Sanna operations.
 - [x] Implement `sanna trust` command with --below filter
 - [x] Implement `sanna review` command with --unproven and --low-confidence filters
 - [x] Implement `sanna approve` command with --note flag
-- [ ] Implement `sanna repl` command (interactive mode) [optional]
+- [x] Implement `sanna repl` command (interactive mode)
 - [x] Implement progress reporting and colored output
 - [x] Implement JSON output mode for tooling integration
 

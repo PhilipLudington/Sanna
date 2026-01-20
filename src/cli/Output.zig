@@ -174,6 +174,7 @@ pub fn printHelp(self: *const Output) void {
         \\    trust       Generate and query trust reports
         \\    review      List items needing review
         \\    approve     Approve code for deployment
+        \\    repl        Interactive mode for specifications
         \\    help        Print help information
         \\
         \\OPTIONS:
@@ -190,6 +191,7 @@ pub fn printHelp(self: *const Output) void {
         \\    sanna trust --below 0.6
         \\    sanna review --unproven
         \\    sanna approve auth.sanna::authenticate --note "Reviewed by Alice"
+        \\    sanna repl
         \\
         \\For more information, visit: https://sanna-lang.org
         \\

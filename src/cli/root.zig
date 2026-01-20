@@ -8,6 +8,7 @@
 //! - trust: Generate and query trust reports
 //! - review: List items needing review
 //! - approve: Approve code for deployment
+//! - repl: Interactive mode for specifications
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -24,6 +25,7 @@ pub const commands = struct {
     pub const trust = @import("commands/trust.zig");
     pub const review = @import("commands/review.zig");
     pub const approve = @import("commands/approve.zig");
+    pub const repl = @import("commands/repl.zig");
 };
 
 /// CLI application state
@@ -111,6 +113,8 @@ pub const Cli = struct {
         } else if (std.mem.eql(u8, command, "approve")) {
             try self.loadConfig();
             return commands.approve.run(self, args);
+        } else if (std.mem.eql(u8, command, "repl")) {
+            return commands.repl.run(self, args);
         } else if (std.mem.eql(u8, command, "help")) {
             self.output.printHelp();
             return 0;
@@ -133,4 +137,5 @@ test {
     _ = commands.trust;
     _ = commands.review;
     _ = commands.approve;
+    _ = commands.repl;
 }
