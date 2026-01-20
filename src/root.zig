@@ -13,6 +13,7 @@ pub const verify = @import("verify/root.zig");
 pub const provenance = @import("provenance/root.zig");
 pub const trust = @import("trust/root.zig");
 pub const codegen = @import("codegen/root.zig");
+pub const cli = @import("cli/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -82,4 +83,5 @@ test {
     _ = provenance;
     _ = trust;
     _ = codegen;
+    _ = cli;
 }

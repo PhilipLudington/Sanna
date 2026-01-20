@@ -121,17 +121,17 @@ Interface for AI-powered implementation generation.
 
 Command-line interface for all Sanna operations.
 
-- [ ] Implement project structure detection and sanna.toml parsing
-- [ ] Implement `sanna init` command (create project scaffold)
-- [ ] Implement `sanna check` command (syntax and consistency checking)
-- [ ] Implement `sanna generate` command with --target and --model flags
-- [ ] Implement `sanna verify` command with --timeout and --obligations flags
-- [ ] Implement `sanna trust` command with --below filter
-- [ ] Implement `sanna review` command with --unproven and --low-confidence filters
-- [ ] Implement `sanna approve` command with --note flag
-- [ ] Implement `sanna repl` command (interactive mode)
-- [ ] Implement progress reporting and colored output
-- [ ] Implement JSON output mode for tooling integration
+- [x] Implement project structure detection and sanna.toml parsing
+- [x] Implement `sanna init` command (create project scaffold)
+- [x] Implement `sanna check` command (syntax and consistency checking)
+- [x] Implement `sanna generate` command with --target and --model flags
+- [x] Implement `sanna verify` command with --timeout and --obligations flags
+- [x] Implement `sanna trust` command with --below filter
+- [x] Implement `sanna review` command with --unproven and --low-confidence filters
+- [x] Implement `sanna approve` command with --note flag
+- [ ] Implement `sanna repl` command (interactive mode) [optional]
+- [x] Implement progress reporting and colored output
+- [x] Implement JSON output mode for tooling integration
 
 ## Phase 9: Standard Library Specifications
 
