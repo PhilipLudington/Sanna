@@ -41,17 +41,17 @@ Type checking with refinement types, invariants, and generics.
 
 Semantic analysis and interpretation of specifications.
 
-- [ ] Implement module resolution and import handling
-- [ ] Implement specification binding (connecting specs to implementations)
-- [ ] Implement precondition (requires) semantic analysis
-- [ ] Implement postcondition (ensures) semantic analysis with old() and result
-- [ ] Implement modifies clause analysis for frame conditions
-- [ ] Implement pure function detection and enforcement
-- [ ] Implement axiom registration and consistency checking
-- [ ] Implement lemma dependency tracking
-- [ ] Implement invariant scoping (type-level, interface-level, module-level)
-- [ ] Implement partial specification handling (??? holes)
-- [ ] Implement decreases clause for termination checking
+- [x] Implement module resolution and import handling
+- [x] Implement specification binding (connecting specs to implementations)
+- [x] Implement precondition (requires) semantic analysis
+- [x] Implement postcondition (ensures) semantic analysis with old() and result
+- [x] Implement modifies clause analysis for frame conditions
+- [x] Implement pure function detection and enforcement
+- [x] Implement axiom registration and consistency checking
+- [x] Implement lemma dependency tracking
+- [x] Implement invariant scoping (type-level, interface-level, module-level)
+- [x] Implement partial specification handling (??? holes)
+- [x] Implement decreases clause for termination checking
 
 ## Phase 4: Verification Engine
 

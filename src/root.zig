@@ -8,6 +8,7 @@ const std = @import("std");
 pub const lexer = @import("lexer/root.zig");
 pub const parser = @import("parser/root.zig");
 pub const types = @import("types/root.zig");
+pub const specs = @import("specs/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -29,8 +30,15 @@ pub const TypeContext = types.TypeContext;
 pub const TypeChecker = types.TypeChecker;
 pub const TypeError = types.TypeError;
 
+// Re-export commonly used types from specification semantics
+pub const ModuleLoader = specs.ModuleLoader;
+pub const ImportResolver = specs.ImportResolver;
+pub const SemanticAnalyzer = specs.SemanticAnalyzer;
+pub const SpecBinding = specs.SpecBinding;
+
 test {
     _ = lexer;
     _ = parser;
     _ = types;
+    _ = specs;
 }
