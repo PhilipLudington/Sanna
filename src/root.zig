@@ -7,6 +7,7 @@ const std = @import("std");
 
 pub const lexer = @import("lexer/root.zig");
 pub const parser = @import("parser/root.zig");
+pub const types = @import("types/root.zig");
 
 // Re-export commonly used types from lexer
 pub const Lexer = lexer.Lexer;
@@ -22,7 +23,14 @@ pub const Declaration = parser.Declaration;
 pub const TypeExpr = parser.TypeExpr;
 pub const Expression = parser.Expression;
 
+// Re-export commonly used types from type system
+pub const Type = types.Type;
+pub const TypeContext = types.TypeContext;
+pub const TypeChecker = types.TypeChecker;
+pub const TypeError = types.TypeError;
+
 test {
     _ = lexer;
     _ = parser;
+    _ = types;
 }

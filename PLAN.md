@@ -24,18 +24,18 @@ Foundation components for parsing and representing Sanna specifications.
 
 Type checking with refinement types, invariants, and generics.
 
-- [ ] Implement basic type representation (primitives, named types, generic types)
-- [ ] Implement type environment and scope management
-- [ ] Implement type inference for expressions
-- [ ] Implement subtype checking for refinement types
-- [ ] Implement generic type instantiation and unification
-- [ ] Implement trait/bound checking (Ord, Eq, Hash constraints)
-- [ ] Implement invariant collection and association with types
-- [ ] Implement model type handling (specification-only mathematical objects)
-- [ ] Implement ghost state tracking (exists only for verification)
-- [ ] Implement type checking for function specifications
-- [ ] Implement type checking for interface specifications
-- [ ] Create type error reporting with source locations
+- [x] Implement basic type representation (primitives, named types, generic types)
+- [x] Implement type environment and scope management
+- [x] Implement type inference for expressions
+- [x] Implement subtype checking for refinement types
+- [x] Implement generic type instantiation and unification
+- [x] Implement trait/bound checking (Ord, Eq, Hash constraints)
+- [x] Implement invariant collection and association with types
+- [x] Implement model type handling (specification-only mathematical objects)
+- [x] Implement ghost state tracking (exists only for verification)
+- [x] Implement type checking for function specifications
+- [x] Implement type checking for interface specifications
+- [x] Create type error reporting with source locations
 
 ## Phase 3: Specification Semantics
 
